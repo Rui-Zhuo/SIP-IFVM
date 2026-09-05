@@ -1,0 +1,1510 @@
+1. output solution from MHD code:
+subroutine OutputHDF5Parallel(time,index_step)
+use mpi
+use hdf5
+use common_u
+use common_grid
+use common_rank
+use params
+implicit none
+real(8),intent(in) :: time
+integer,intent(in) :: index_step
+integer :: ierr
+integer :: i,j,k
+integer:: theta_indStart,theta_indEnd,ph_indStart,ph_indEnd,r_indStart,r_indEnd
+integer :: Inttime_temp,hdf5index_r,hdf5index_theta,hdf5index_ph,ii,jj,kk
+real(8) :: rho
+real(8) :: vx,vy,vz
+real(8) :: P
+real(8) :: Bx,By,Bz
+real(8) :: OUT_cadence 
+real(8) :: time_temp
+character(len=256) :: filnam
+character(len=1)  :: cnyy
+character(len=2) :: S2_Char
+character(len=:),allocatable :: ctime
+character(len=:),allocatable :: S1_Char
+!=========================================================
+! HDF5 variables
+!=========================================================
+integer(HID_T) :: file_id
+integer(HID_T) :: dset_id
+integer(HID_T) :: filespace
+integer(HID_T) :: memspace
+integer(HID_T) :: plist_id
+integer(HID_T) :: dxpl_id
+integer(HID_T) :: attr_id
+integer(HID_T) :: attr_space
+integer(HSIZE_T),dimension(4) :: dims
+integer(HSIZE_T),dimension(4) :: count
+integer(HSIZE_T),dimension(4) :: offset
+integer(HSIZE_T),dimension(1) :: adims
+!=========================================================
+! local buffer
+!=========================================================
+real(8),allocatable :: Variables(:,:,:,:)
+integer :: local_r
+integer :: local_th
+integer :: local_ph
+integer :: r_indexglob
+integer :: th_indexglob
+integer :: ph_indexglob
+!=========================================================
+! filename
+!=========================================================
+  allocate(character(len=10)::ctime)
+  allocate(character(len=10)::S1_Char)
+  time_temp=time*100.d0
+  Inttime_temp=int(time_temp)
+  call INT2STR(Inttime_temp,S1_Char)
+  if(len_trim(S1_Char)>=3) then
+      S2_Char=S1_Char(len_trim(S1_Char)-1:len_trim(S1_Char))
+      S1_Char=S1_Char(1:len_trim(S1_Char)-2)
+  else if(len_trim(S1_Char)==2) then
+      S2_Char=S1_Char(len_trim(S1_Char)-1:len_trim(S1_Char))
+      S1_Char='0'
+  else
+      S2_Char='0'//S1_Char(len_trim(S1_Char):len_trim(S1_Char))
+      S1_Char='0'
+  endif
+  !OUT_cadence=1.d-2
+  !index_step=2
+  !if((time-int(time))<OUT_cadence) then
+  !    index_step=1
+  !endif
+  !index_step=2
+  if(time_int==0) then
+      ctime=S1_Char//'_'//S2_Char
+  else
+      ctime=S1_Char
+  endif
+  write(cnyy,"(i1.1)") nyy
+  if(index_step==3)then
+      filnam='DATA'//trim(folder_Suffix)//trim(ctime)//'_'//cnyy//'skip2.h5'
+  else if(index_step==2)then
+      filnam='DATA'//trim(folder_Suffix)//trim(ctime)//'_'//cnyy//'skip1.h5'
+  else if(index_step==1)then
+      filnam='DATA'//trim(folder_Suffix)//trim(ctime)//'_'//cnyy//'ori.h5'
+  end if   
+!write(cnyy,'(I0)') nyy
+!write(filnam,'("DATA/Component_",A,".h5")') trim(cnyy)
+!=========================================================
+! local size
+!=========================================================
+  theta_indStart=1    
+  theta_indEnd=N_th  
+  ph_indStart=1  
+  ph_indEnd=N_ph
+  r_indStart=1  
+  r_indEnd=N_r
+  hdf5index_r=int((r_indEnd-r_indStart)/index_step)+1
+  hdf5index_theta=int((theta_indEnd-theta_indStart)/index_step)+1
+  hdf5index_ph=int((ph_indEnd-ph_indStart)/index_step)+1 
+local_r  = hdf5index_r
+local_th = hdf5index_theta
+local_ph = hdf5index_ph
+allocate(Variables(8,local_r,local_th,local_ph))
+!=========================================================
+! fill local physical cells
+! no ghost cells
+!=========================================================
+do kk=1,local_ph
+    k=(kk-1)*index_step+1
+    do jj=1,local_th
+        j=(jj-1)*index_step+1
+        do ii=1,local_r
+            i=(ii-1)*index_step+1
+            rho = U(1,i,j,k)
+            vx = U(2,i,j,k)/rho
+            vy = U(3,i,j,k)/rho
+            vz = U(4,i,j,k)/rho
+            P = U(6,i,j,k)
+            Bx = U(7,i,j,k)+B0(1,i,j,k)
+            By = U(8,i,j,k)+B0(2,i,j,k)
+            Bz = U(9,i,j,k)+B0(3,i,j,k)
+            Variables(1,ii,jj,kk)=rho
+            Variables(2,ii,jj,kk)=vx
+            Variables(3,ii,jj,kk)=vy
+            Variables(4,ii,jj,kk)=vz
+            Variables(5,ii,jj,kk)=P
+            Variables(6,ii,jj,kk)=Bx
+            Variables(7,ii,jj,kk)=By
+            Variables(8,ii,jj,kk)=Bz
+        enddo
+    enddo
+enddo
+!=========================================================
+! global position
+! calculated in grid_system()
+!=========================================================
+r_indexglob  = mpi_yinyang_comp_coord(l_sub_r)*local_r
+th_indexglob = mpi_yinyang_comp_coord(l_sub_th)*local_th
+ph_indexglob = mpi_yinyang_comp_coord(l_sub_ph)*local_ph
+!=========================================================
+! HDF5 initialize
+!=========================================================
+call h5open_f(ierr)
+!=========================================================
+! MPI-IO file access property
+!=========================================================
+call h5pcreate_f(H5P_FILE_ACCESS_F,plist_id,ierr)
+call h5pset_fapl_mpio_f( &
+        plist_id, &
+        comm_yinyang_comp_carr, &
+        MPI_INFO_NULL, &
+        ierr)
+!=========================================================
+! create file collectively
+!=========================================================
+call h5fcreate_f( &
+        trim(filnam), &
+        H5F_ACC_TRUNC_F, &
+        file_id, &
+        ierr, &
+        access_prp=plist_id)
+call h5pclose_f(plist_id,ierr)
+!=========================================================
+! global dataset size
+!
+! Variables(8,Nr,Nth,Nph)
+!
+!=========================================================
+dims(1)=8
+dims(2)=pe_r_total*local_r
+dims(3)=pe_th_total(nyy)*local_th
+dims(4)=pe_ph_total(nyy)*local_ph
+call h5screate_simple_f(4,dims,filespace,ierr)
+!=========================================================
+! create dataset
+!=========================================================
+call h5dcreate_f( &
+        file_id, &
+        "Variables", &
+        H5T_NATIVE_DOUBLE, &
+        filespace, &
+        dset_id, &
+        ierr)
+call h5sclose_f(filespace,ierr)
+!=========================================================
+! select hyperslab
+!=========================================================
+call h5dget_space_f(dset_id,filespace,ierr)
+offset(1)=0
+offset(2)=r_indexglob
+offset(3)=th_indexglob
+offset(4)=ph_indexglob
+count(1)=8
+count(2)=local_r
+count(3)=local_th
+count(4)=local_ph
+call h5sselect_hyperslab_f( &
+        filespace, &
+        H5S_SELECT_SET_F, &
+        offset, &
+        count, &
+        ierr)
+!=========================================================
+! memory space
+!=========================================================
+call h5screate_simple_f(4,count,memspace,ierr)
+!=========================================================
+! collective write property
+!=========================================================
+call h5pcreate_f( &
+        H5P_DATASET_XFER_F, &
+        dxpl_id, &
+        ierr)
+call h5pset_dxpl_mpio_f( &
+        dxpl_id, &
+        H5FD_MPIO_COLLECTIVE_F, &
+        ierr)
+!=========================================================
+! collective MPI write
+!=========================================================
+call h5dwrite_f( &
+        dset_id, &
+        H5T_NATIVE_DOUBLE, &
+        Variables, &
+        count, &
+        ierr, &
+        file_space_id = filespace, &
+        mem_space_id  = memspace, &
+        xfer_prp      = dxpl_id)
+call h5pclose_f(dxpl_id,ierr)
+!=========================================================
+! close HDF5 objects
+!=========================================================
+call h5sclose_f(memspace,ierr)
+call h5sclose_f(filespace,ierr)
+call h5dclose_f(dset_id,ierr)
+call h5fclose_f(file_id,ierr)
+call h5close_f(ierr)
+!=========================================================
+!---------------------------------------
+! wait until everyone has closed file
+!---------------------------------------
+call MPI_BARRIER(comm_yinyang_comp_carr,ierr)
+!---------------------------------------
+! reopen file serially
+!---------------------------------------
+if( mpi_yinyang_comp_coord(l_sub_r)==0 .and. &
+    mpi_yinyang_comp_coord(l_sub_th)==0 .and. &
+    mpi_yinyang_comp_coord(l_sub_ph)==0 ) then
+    call h5open_f(ierr)
+    call h5fopen_f(trim(filnam),H5F_ACC_RDWR_F,file_id,ierr)
+    call h5dopen_f(file_id,"Variables",dset_id,ierr)
+    adims(1)=1
+    call h5screate_simple_f(1,adims,attr_space,ierr)
+    call h5acreate_f(dset_id,"simulation_time", &
+                     H5T_NATIVE_DOUBLE,attr_space,attr_id,ierr)
+    call h5awrite_f(attr_id,H5T_NATIVE_DOUBLE,time,adims,ierr)
+    call h5aclose_f(attr_id,ierr)
+    call h5acreate_f(dset_id,"nyy_component", &
+                     H5T_NATIVE_INTEGER,attr_space,attr_id,ierr)
+    call h5awrite_f(attr_id,H5T_NATIVE_INTEGER,nyy,adims,ierr)
+    call h5aclose_f(attr_id,ierr)
+    call h5sclose_f(attr_space,ierr)
+    call h5dclose_f(dset_id,ierr)
+    call h5fclose_f(file_id,ierr)
+    call h5close_f(ierr)
+endif 
+! release memory
+!=========================================================
+deallocate(Variables)
+end subroutine OutputHDF5Parallel
+
+2. output grid from MHD code:
+subroutine GridHDF5Parallel(time,index_step)
+use mpi
+use hdf5
+use common_u
+use common_grid
+use common_rank
+use params
+implicit none
+real(8),intent(in) :: time
+integer,intent(in) :: index_step
+integer :: ierr
+integer :: i,j,k
+integer:: theta_indStart,theta_indEnd,ph_indStart,ph_indEnd,r_indStart,r_indEnd
+integer :: Inttime_temp,hdf5index_r,hdf5index_theta,hdf5index_ph,ii,jj,kk
+real(8) :: x,y,z 
+real(8) :: time_temp
+character(len=256) :: filnam
+character(len=1)  :: cnyy
+character(len=2) :: S2_Char
+character(len=:),allocatable :: ctime
+character(len=:),allocatable :: S1_Char
+!=========================================================
+! HDF5 variables
+!=========================================================
+integer(HID_T) :: file_id
+integer(HID_T) :: dset_id
+integer(HID_T) :: filespace
+integer(HID_T) :: memspace
+integer(HID_T) :: plist_id
+integer(HID_T) :: dxpl_id
+integer(HID_T) :: attr_id
+integer(HID_T) :: attr_space
+integer(HSIZE_T),dimension(4) :: dims
+integer(HSIZE_T),dimension(4) :: count
+integer(HSIZE_T),dimension(4) :: offset
+integer(HSIZE_T),dimension(1) :: adims
+!=========================================================
+! local buffer
+!=========================================================
+real(8),allocatable :: Variables(:,:,:,:)
+integer :: local_r
+integer :: local_th
+integer :: local_ph
+integer :: r_indexglob
+integer :: th_indexglob
+integer :: ph_indexglob
+!=========================================================
+! filename
+!=========================================================
+  allocate(character(len=10)::ctime)
+  allocate(character(len=10)::S1_Char)
+  time_temp=time*100.d0
+  Inttime_temp=int(time_temp)
+  call INT2STR(Inttime_temp,S1_Char)
+  if(len_trim(S1_Char)>=3) then
+      S2_Char=S1_Char(len_trim(S1_Char)-1:len_trim(S1_Char))
+      S1_Char=S1_Char(1:len_trim(S1_Char)-2)
+  else if(len_trim(S1_Char)==2) then
+      S2_Char=S1_Char(len_trim(S1_Char)-1:len_trim(S1_Char))
+      S1_Char='0'
+  else
+      S2_Char='0'//S1_Char(len_trim(S1_Char):len_trim(S1_Char))
+      S1_Char='0'
+  endif
+  if(time_int==0) then
+      ctime=S1_Char//'_'//S2_Char
+  else
+      ctime=S1_Char
+  endif
+  write(cnyy,"(i1.1)") nyy
+  if(index_step==3)then
+      filnam='DATA'//trim(folder_Suffix)//trim(ctime)//'_'//cnyy//'Gridskip2.h5'
+  else if(index_step==2)then
+      filnam='DATA'//trim(folder_Suffix)//trim(ctime)//'_'//cnyy//'Gridskip1.h5'
+  else if(index_step==1)then
+      filnam='DATA'//trim(folder_Suffix)//trim(ctime)//'_'//cnyy//'Gridori.h5'
+  end if   
+!write(cnyy,'(I0)') nyy
+!write(filnam,'("DATA/Component_",A,".h5")') trim(cnyy)
+!=========================================================
+! local size
+!=========================================================
+  theta_indStart=1    
+  theta_indEnd=N_th  
+  ph_indStart=1  
+  ph_indEnd=N_ph
+  r_indStart=1  
+  r_indEnd=N_r
+  hdf5index_r=int((r_indEnd-r_indStart)/index_step)+1
+  hdf5index_theta=int((theta_indEnd-theta_indStart)/index_step)+1
+  hdf5index_ph=int((ph_indEnd-ph_indStart)/index_step)+1 
+local_r  = hdf5index_r
+local_th = hdf5index_theta
+local_ph = hdf5index_ph
+allocate(Variables(3,local_r,local_th,local_ph))
+!=========================================================
+! fill local physical cells
+! no ghost cells
+!=========================================================
+do kk=1,local_ph
+    k=(kk-1)*index_step+1
+    do jj=1,local_th
+        j=(jj-1)*index_step+1
+        do ii=1,local_r
+            i=(ii-1)*index_step+1
+            x=V_x_hex(i,j,k)   
+            y=V_y_hex(i,j,k)   
+            z=V_z_hex(i,j,k)
+            Variables(1,ii,jj,kk)=x
+            Variables(2,ii,jj,kk)=y
+            Variables(3,ii,jj,kk)=z
+        enddo
+    enddo
+enddo
+!=========================================================
+! global position
+! calculated in grid_system()
+!=========================================================
+r_indexglob  = mpi_yinyang_comp_coord(l_sub_r)*local_r
+th_indexglob = mpi_yinyang_comp_coord(l_sub_th)*local_th
+ph_indexglob = mpi_yinyang_comp_coord(l_sub_ph)*local_ph
+!write(*,*)"r_indexglob=",r_indexglob,"th_indexglob=",th_indexglob,"ph_indexglob=",ph_indexglob
+!=========================================================
+! HDF5 initialize
+!=========================================================
+call h5open_f(ierr)
+!=========================================================
+! MPI-IO file access property
+!=========================================================
+call h5pcreate_f(H5P_FILE_ACCESS_F,plist_id,ierr)
+call h5pset_fapl_mpio_f( &
+        plist_id, &
+        comm_yinyang_comp_carr, &
+        MPI_INFO_NULL, &
+        ierr)
+!=========================================================
+! create file collectively
+!=========================================================
+call h5fcreate_f( &
+        trim(filnam), &
+        H5F_ACC_TRUNC_F, &
+        file_id, &
+        ierr, &
+        access_prp=plist_id)
+call h5pclose_f(plist_id,ierr)
+!=========================================================
+! global dataset size
+!
+! Variables(8,Nr,Nth,Nph)
+!
+!=========================================================
+dims(1)=3
+dims(2)=pe_r_total*local_r
+dims(3)=pe_th_total(nyy)*local_th
+dims(4)=pe_ph_total(nyy)*local_ph
+call h5screate_simple_f(4,dims,filespace,ierr)
+!=========================================================
+! create dataset
+!=========================================================
+call h5dcreate_f( &
+        file_id, &
+        "Variables", &
+        H5T_NATIVE_DOUBLE, &
+        filespace, &
+        dset_id, &
+        ierr)
+call h5sclose_f(filespace,ierr)
+!=========================================================
+! select hyperslab
+!=========================================================
+call h5dget_space_f(dset_id,filespace,ierr)
+offset(1)=0
+offset(2)=r_indexglob
+offset(3)=th_indexglob
+offset(4)=ph_indexglob
+count(1)=3
+count(2)=local_r
+count(3)=local_th
+count(4)=local_ph
+call h5sselect_hyperslab_f( &
+        filespace, &
+        H5S_SELECT_SET_F, &
+        offset, &
+        count, &
+        ierr)
+!=========================================================
+! memory space
+!=========================================================
+call h5screate_simple_f(4,count,memspace,ierr)
+!=========================================================
+! collective write property
+!=========================================================
+call h5pcreate_f( &
+        H5P_DATASET_XFER_F, &
+        dxpl_id, &
+        ierr)
+call h5pset_dxpl_mpio_f( &
+        dxpl_id, &
+        H5FD_MPIO_COLLECTIVE_F, &
+        ierr)
+!=========================================================
+! collective MPI write
+!=========================================================
+call h5dwrite_f( &
+        dset_id, &
+        H5T_NATIVE_DOUBLE, &
+        Variables, &
+        count, &
+        ierr, &
+        file_space_id = filespace, &
+        mem_space_id  = memspace, &
+        xfer_prp      = dxpl_id)
+call h5pclose_f(dxpl_id,ierr)
+!=========================================================
+! close HDF5 objects
+!=========================================================
+call h5sclose_f(memspace,ierr)
+call h5sclose_f(filespace,ierr)
+call h5dclose_f(dset_id,ierr)
+call h5fclose_f(file_id,ierr)
+call h5close_f(ierr)
+!=========================================================
+!---------------------------------------
+! wait until everyone has closed file
+!---------------------------------------
+call MPI_BARRIER(comm_yinyang_comp_carr,ierr)
+!---------------------------------------
+! reopen file serially
+!---------------------------------------
+if( mpi_yinyang_comp_coord(l_sub_r)==0 .and. &
+    mpi_yinyang_comp_coord(l_sub_th)==0 .and. &
+    mpi_yinyang_comp_coord(l_sub_ph)==0 ) then
+    call h5open_f(ierr)
+    call h5fopen_f(trim(filnam),H5F_ACC_RDWR_F,file_id,ierr)
+    call h5dopen_f(file_id,"Variables",dset_id,ierr)
+    adims(1)=1
+    call h5screate_simple_f(1,adims,attr_space,ierr)
+    call h5acreate_f(dset_id,"simulation_time", &
+                     H5T_NATIVE_DOUBLE,attr_space,attr_id,ierr)
+    call h5awrite_f(attr_id,H5T_NATIVE_DOUBLE,time,adims,ierr)
+    call h5aclose_f(attr_id,ierr)
+    call h5acreate_f(dset_id,"nyy_component", &
+                     H5T_NATIVE_INTEGER,attr_space,attr_id,ierr)
+    call h5awrite_f(attr_id,H5T_NATIVE_INTEGER,nyy,adims,ierr)
+    call h5aclose_f(attr_id,ierr)
+    call h5sclose_f(attr_space,ierr)
+    call h5dclose_f(dset_id,ierr)
+    call h5fclose_f(file_id,ierr)
+    call h5close_f(ierr)
+endif 
+
+! release memory
+!=========================================================
+deallocate(Variables)
+end subroutine GridHDF5Parallel
+
+3. Snippet for reading the output data from MHD code:
+  gamma=5.d0/3.d0 !1.3d0 !1.1d0 !1.3d0 ! 1.08d0 !
+  Rs = 6.963d8
+  Ts = 1.3d6 
+  nrho= 1.5d8
+  rhos = nrho*1.d6*1.672d-27     ! rho at surface
+  R11=1.653d4 
+  VS = dsqrt(gamma*R11*Ts)
+  dmu0 = 4.d-7*pi 
+  Ps=rhos*VS**2
+  Bs = dsqrt(dmu0*rhos*VS*VS) 
+  Omega0=2.0*pi/(25.38*24.0*3600.0)!2.0*pi/(26.0*24.0*3600.0)!
+  Omegas=Vs/Rs
+  muT2Gs=10.d0
+  write(*,*)Bs 
+  
+  size1= 9 ! 8 !24!
+  size2= size1! + 1 
+  size3= size2! + 1 
+  
+  nrsize1 = 24 !12 !4!
+  nrsize2 = 30
+  nrsize3 = 45
+  nrsize1=1+int((nrsize1-1)/resolution_scale)
+  
+  pe_r_total = 9 !8 !24!
+  pe_th_total(1:4) = 4 ! 2
+  pe_ph_total(1:4) = 4 ! 2
+  pe_th_total(5) = 4 ! 2
+  pe_ph_total(5) = 4 ! 2
+  pe_th_total(6) = 4 ! 2
+  pe_ph_total(6) = 4 ! 2
+  
+  !nrt = 96
+  N_th = 22!31
+  N_ph = 22!31
+  N_th=1+int((N_th-1)/resolution_scale)
+  N_ph=1+int((N_ph-1)/resolution_scale)
+  N_th_total(1:6) = N_th*pe_th_total(1:6)
+  N_ph_total(1:6) = N_ph*pe_ph_total(1:6)
+  
+  Res_scale=1
+  N_th_p=80
+  N_ph_p=N_th_p*2
+  N_th_p=N_th_p*Res_scale
+  N_ph_p=N_ph_p*Res_scale
+
+! read grid information:
+             write(cmype1 ,"(i1.1)") 0
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridskip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"Grid_nyy_=",nyy_
+             xtotal1(1:nrt,1:N_th_total(1),1:N_ph_total(1))=Variables_(1,1:nrt,1:N_th_total(1),1:N_ph_total(1))
+             ytotal1(1:nrt,1:N_th_total(1),1:N_ph_total(1))=Variables_(2,1:nrt,1:N_th_total(1),1:N_ph_total(1))
+             ztotal1(1:nrt,1:N_th_total(1),1:N_ph_total(1))=Variables_(3,1:nrt,1:N_th_total(1),1:N_ph_total(1))
+             ii=1
+             do nrt_=-1,0
+                 xtotal1(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=xtotal1(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ytotal1(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ytotal1(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ztotal1(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ztotal1(1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             write(cmype1 ,"(i1.1)") 1
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridskip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"Grid_nyy_=",nyy_
+             xtotal2(1:nrt,1:N_th_total(2),1:N_ph_total(2))=Variables_(1,1:nrt,1:N_th_total(2),1:N_ph_total(2))
+             ytotal2(1:nrt,1:N_th_total(2),1:N_ph_total(2))=Variables_(2,1:nrt,1:N_th_total(2),1:N_ph_total(2))
+             ztotal2(1:nrt,1:N_th_total(2),1:N_ph_total(2))=Variables_(3,1:nrt,1:N_th_total(2),1:N_ph_total(2))
+             ii=2
+             do nrt_=-1,0
+                 xtotal2(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=xtotal2(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ytotal2(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ytotal2(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ztotal2(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ztotal2(1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             write(cmype1 ,"(i1.1)") 2
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridskip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"Grid_nyy_=",nyy_
+             xtotal3(1:nrt,1:N_th_total(3),1:N_ph_total(3))=Variables_(1,1:nrt,1:N_th_total(3),1:N_ph_total(3))
+             ytotal3(1:nrt,1:N_th_total(3),1:N_ph_total(3))=Variables_(2,1:nrt,1:N_th_total(3),1:N_ph_total(3))
+             ztotal3(1:nrt,1:N_th_total(3),1:N_ph_total(3))=Variables_(3,1:nrt,1:N_th_total(3),1:N_ph_total(3))
+             ii=3
+             do nrt_=-1,0
+                 xtotal3(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=xtotal3(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ytotal3(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ytotal3(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ztotal3(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ztotal3(1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             write(cmype1 ,"(i1.1)") 3
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridskip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"Grid_nyy_=",nyy_
+             xtotal4(1:nrt,1:N_th_total(4),1:N_ph_total(4))=Variables_(1,1:nrt,1:N_th_total(4),1:N_ph_total(4))
+             ytotal4(1:nrt,1:N_th_total(4),1:N_ph_total(4))=Variables_(2,1:nrt,1:N_th_total(4),1:N_ph_total(4))
+             ztotal4(1:nrt,1:N_th_total(4),1:N_ph_total(4))=Variables_(3,1:nrt,1:N_th_total(4),1:N_ph_total(4))
+             ii=4
+             do nrt_=-1,0
+                 xtotal4(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=xtotal4(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ytotal4(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ytotal4(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ztotal4(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ztotal4(1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             write(cmype1 ,"(i1.1)") 4
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridskip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"Grid_nyy_=",nyy_
+             xtotal5(1:nrt,1:N_th_total(5),1:N_ph_total(5))=Variables_(1,1:nrt,1:N_th_total(5),1:N_ph_total(5))
+             ytotal5(1:nrt,1:N_th_total(5),1:N_ph_total(5))=Variables_(2,1:nrt,1:N_th_total(5),1:N_ph_total(5))
+             ztotal5(1:nrt,1:N_th_total(5),1:N_ph_total(5))=Variables_(3,1:nrt,1:N_th_total(5),1:N_ph_total(5))
+             ii=5
+             do nrt_=-1,0
+                 xtotal5(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=xtotal5(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ytotal5(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ytotal5(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ztotal5(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ztotal5(1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             write(cmype1 ,"(i1.1)") 5
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//'0_00_'//cmype1//'Gridskip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"Grid_nyy_=",nyy_
+             xtotal6(1:nrt,1:N_th_total(6),1:N_ph_total(6))=Variables_(1,1:nrt,1:N_th_total(6),1:N_ph_total(6))
+             ytotal6(1:nrt,1:N_th_total(6),1:N_ph_total(6))=Variables_(2,1:nrt,1:N_th_total(6),1:N_ph_total(6))
+             ztotal6(1:nrt,1:N_th_total(6),1:N_ph_total(6))=Variables_(3,1:nrt,1:N_th_total(6),1:N_ph_total(6))
+             ii=6
+             do nrt_=-1,0
+                 xtotal6(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=xtotal6(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ytotal6(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ytotal6(1,1:N_th_total(ii),1:N_ph_total(ii))
+                 ztotal6(nrt_,1:N_th_total(ii),1:N_ph_total(ii))=ztotal6(1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+
+! read eight solutions
+             time=time_Start+real(Seq_)/100.d0+save_first+0.001
+             time_temp=time*100
+             Inttime_temp=int(time_temp)
+             call INT2STR(Inttime_temp,S1_Char)
+             S2_Char=S1_Char(len_trim(S1_Char)-1:len_trim(S1_Char))
+             S1_Char=S1_Char(1:len_trim(S1_Char)-2)
+			 if(time_int .eqv. .false.)ctime=S1_Char//'_'//S2_Char
+			 if(time_int .eqv. .true.)ctime=S1_Char
+			 write(*,*)"S1_Char=",S1_Char
+             ctime=TRIM(ctime) 
+			 write(*,*)"ctime=",ctime
+			 Time_cur=time-time_begCME
+
+             write(cmype1 ,"(i1.1)") 0
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'ori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'skip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"nyy_=",nyy_,"time_=",time_
+             utotal_1(1:4,1:nrt,1:N_th_total(1),1:N_ph_total(1))=Variables_(1:4,1:nrt,1:N_th_total(1),1:N_ph_total(1)) ! rho, vx, vy, vz                     
+             utotal_1(6,1:nrt,1:N_th_total(1),1:N_ph_total(1))=Variables_(5,1:nrt,1:N_th_total(1),1:N_ph_total(1)) ! pressure
+             B_1(1:3,1:nrt,1:N_th_total(1),1:N_ph_total(1))=Variables_(6:8,1:nrt,1:N_th_total(1),1:N_ph_total(1)) ! magnetic field Bx, By, Bz
+             utotal_1(5,1:nrt,1:N_th_total(1),1:N_ph_total(1))=Variables_(5,1:nrt,1:N_th_total(1),1:N_ph_total(1)) ! energy is not used
+             ii=1
+             do nrt_=-1,0
+                 utotal_1(1:6,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=utotal_1(1:6,1,1:N_th_total(ii),1:N_ph_total(ii))
+                 B_1(1:3,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=B_1(1:3,1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             B1_1=0.d0
+             Ca_1=0.d0
+             Current_1=0.d0             
+              !-->>From corotation frame to inerrial coordinate system--------
+              if(CorotiontoInertial .eqv. .true.)then  
+                  Omega(1)=0.d0          
+                  Omega(2)=0.d0          
+                  Omega(3)=Omega0/Omegas 
+                  do k=1,N_ph_total(1)
+                      do j=1,N_th_total(1)
+                          do i=-1,nrt             
+                              posi(1)=xtotal1(i,j,k)                        
+                              posi(2)=ytotal1(i,j,k)                         
+                              posi(3)=ztotal1(i,j,k)                          
+                              OmgR(1) = Omega(2)*posi(3)-Omega(3)*posi(2)                        
+                              OmgR(2) = Omega(3)*posi(1)-Omega(1)*posi(3)                         
+                              OmgR(3) = Omega(1)*posi(2)-Omega(2)*posi(1)                          
+                              utotal_1(2:4,i,j,k)=utotal_1(2:4,i,j,k)+OmgR(1:3)
+                          end do
+                      end do
+                  end do 
+              end if
+              !----From corotation frame to inerrial coordinate system<<--------     
+
+             write(cmype1 ,"(i1.1)") 1
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'ori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'skip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"nyy_=",nyy_,"time_=",time_
+             utotal_2(1:4,1:nrt,1:N_th_total(2),1:N_ph_total(2))=Variables_(1:4,1:nrt,1:N_th_total(2),1:N_ph_total(2)) ! rho, vx, vy, vz 
+             utotal_2(6,1:nrt,1:N_th_total(2),1:N_ph_total(2))=Variables_(5,1:nrt,1:N_th_total(2),1:N_ph_total(2)) ! pressure
+             B_2(1:3,1:nrt,1:N_th_total(2),1:N_ph_total(2))=Variables_(6:8,1:nrt,1:N_th_total(2),1:N_ph_total(2)) ! magnetic field Bx, By, Bz
+             utotal_2(5,1:nrt,1:N_th_total(2),1:N_ph_total(2))=Variables_(5,1:nrt,1:N_th_total(2),1:N_ph_total(2)) ! energy is not used
+             ii=2
+             do nrt_=-1,0
+                 utotal_2(1:6,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=utotal_2(1:6,1,1:N_th_total(ii),1:N_ph_total(ii))
+                 B_2(1:3,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=B_2(1:3,1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             B1_2=0.d0
+             Ca_2=0.d0
+             Current_2=0.d0
+             !-->>From corotation frame to inerrial coordinate system--------
+              if(CorotiontoInertial .eqv. .true.)then  
+                  Omega(1)=0.d0          
+                  Omega(2)=0.d0          
+                  Omega(3)=Omega0/Omegas 
+                  do k=1,N_ph_total(2)
+                      do j=1,N_th_total(2)
+                          do i=-1,nrt             
+                              posi(1)=xtotal2(i,j,k)                        
+                              posi(2)=ytotal2(i,j,k)                         
+                              posi(3)=ztotal2(i,j,k)                          
+                              OmgR(1) = Omega(2)*posi(3)-Omega(3)*posi(2)                        
+                              OmgR(2) = Omega(3)*posi(1)-Omega(1)*posi(3)                         
+                              OmgR(3) = Omega(1)*posi(2)-Omega(2)*posi(1)                          
+                              utotal_2(2:4,i,j,k)=utotal_2(2:4,i,j,k)+OmgR(1:3)
+                          end do
+                      end do
+                  end do 
+              end if
+              !----From corotation frame to inerrial coordinate system<<--------     
+             
+             write(cmype1 ,"(i1.1)") 2
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'ori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'skip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"nyy_=",nyy_,"time_=",time_
+             utotal_3(1:4,1:nrt,1:N_th_total(3),1:N_ph_total(3))=Variables_(1:4,1:nrt,1:N_th_total(3),1:N_ph_total(3)) ! rho, vx, vy, vz 
+             utotal_3(6,1:nrt,1:N_th_total(3),1:N_ph_total(3))=Variables_(5,1:nrt,1:N_th_total(3),1:N_ph_total(3)) ! pressure
+             B_3(1:3,1:nrt,1:N_th_total(3),1:N_ph_total(3))=Variables_(6:8,1:nrt,1:N_th_total(3),1:N_ph_total(3)) ! magnetic field Bx, By, Bz
+             utotal_3(5,1:nrt,1:N_th_total(3),1:N_ph_total(3))=Variables_(5,1:nrt,1:N_th_total(3),1:N_ph_total(3)) ! energy is not used
+             ii=3
+             do nrt_=-1,0
+                 utotal_3(1:6,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=utotal_3(1:6,1,1:N_th_total(ii),1:N_ph_total(ii))
+                 B_3(1:3,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=B_3(1:3,1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             B1_3=0.d0
+             Ca_3=0.d0
+             Current_3=0.d0             
+             !-->>From corotation frame to inerrial coordinate system--------
+              if(CorotiontoInertial .eqv. .true.)then  
+                  Omega(1)=0.d0          
+                  Omega(2)=0.d0          
+                  Omega(3)=Omega0/Omegas 
+                  do k=1,N_ph_total(3)
+                      do j=1,N_th_total(3)
+                          do i=-1,nrt             
+                              posi(1)=xtotal3(i,j,k)                        
+                              posi(2)=ytotal3(i,j,k)                         
+                              posi(3)=ztotal3(i,j,k)                          
+                              OmgR(1) = Omega(2)*posi(3)-Omega(3)*posi(2)                        
+                              OmgR(2) = Omega(3)*posi(1)-Omega(1)*posi(3)                         
+                              OmgR(3) = Omega(1)*posi(2)-Omega(2)*posi(1)                          
+                              utotal_3(2:4,i,j,k)=utotal_3(2:4,i,j,k)+OmgR(1:3)
+                          end do
+                      end do
+                  end do 
+              end if
+              !----From corotation frame to inerrial coordinate system<<--------     
+             
+             write(cmype1 ,"(i1.1)") 3
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'ori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'skip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"nyy_=",nyy_,"time_=",time_
+             utotal_4(1:4,1:nrt,1:N_th_total(4),1:N_ph_total(4))=Variables_(1:4,1:nrt,1:N_th_total(4),1:N_ph_total(4)) ! rho, vx, vy, vz 
+             utotal_4(6,1:nrt,1:N_th_total(4),1:N_ph_total(4))=Variables_(5,1:nrt,1:N_th_total(4),1:N_ph_total(4)) ! pressure
+             B_4(1:3,1:nrt,1:N_th_total(4),1:N_ph_total(4))=Variables_(6:8,1:nrt,1:N_th_total(4),1:N_ph_total(4)) ! magnetic field Bx, By, Bz
+             utotal_4(5,1:nrt,1:N_th_total(4),1:N_ph_total(4))=Variables_(5,1:nrt,1:N_th_total(4),1:N_ph_total(4)) ! energy is not used
+             ii=4
+             do nrt_=-1,0
+                 utotal_4(1:6,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=utotal_4(1:6,1,1:N_th_total(ii),1:N_ph_total(ii))
+                 B_4(1:3,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=B_4(1:3,1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             B1_4=0.d0
+             Ca_4=0.d0
+             Current_4=0.d0
+             !-->>From corotation frame to inerrial coordinate system--------
+              if(CorotiontoInertial .eqv. .true.)then  
+                  Omega(1)=0.d0          
+                  Omega(2)=0.d0          
+                  Omega(3)=Omega0/Omegas 
+                  do k=1,N_ph_total(4)
+                      do j=1,N_th_total(4)
+                          do i=-1,nrt             
+                              posi(1)=xtotal4(i,j,k)                        
+                              posi(2)=ytotal4(i,j,k)                         
+                              posi(3)=ztotal4(i,j,k)                          
+                              OmgR(1) = Omega(2)*posi(3)-Omega(3)*posi(2)                        
+                              OmgR(2) = Omega(3)*posi(1)-Omega(1)*posi(3)                         
+                              OmgR(3) = Omega(1)*posi(2)-Omega(2)*posi(1)                          
+                              utotal_4(2:4,i,j,k)=utotal_4(2:4,i,j,k)+OmgR(1:3)
+                          end do
+                      end do
+                  end do 
+              end if
+              !----From corotation frame to inerrial coordinate system<<--------     
+             
+             write(cmype1 ,"(i1.1)") 4
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'ori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'skip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"nyy_=",nyy_,"time_=",time_
+             utotal_5(1:4,1:nrt,1:N_th_total(5),1:N_ph_total(5))=Variables_(1:4,1:nrt,1:N_th_total(5),1:N_ph_total(5)) ! rho, vx, vy, vz 
+             utotal_5(6,1:nrt,1:N_th_total(5),1:N_ph_total(5))=Variables_(5,1:nrt,1:N_th_total(5),1:N_ph_total(5)) ! pressure
+             B_5(1:3,1:nrt,1:N_th_total(5),1:N_ph_total(5))=Variables_(6:8,1:nrt,1:N_th_total(5),1:N_ph_total(5)) ! magnetic field Bx, By, Bz
+             utotal_5(5,1:nrt,1:N_th_total(5),1:N_ph_total(5))=Variables_(5,1:nrt,1:N_th_total(5),1:N_ph_total(5)) ! energy is not used
+             ii=5
+             do nrt_=-1,0
+                 utotal_5(1:6,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=utotal_5(1:6,1,1:N_th_total(ii),1:N_ph_total(ii))
+                 B_5(1:3,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=B_5(1:3,1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             B1_5=0.d0
+             Ca_5=0.d0
+             Current_5=0.d0
+             !-->>From corotation frame to inerrial coordinate system--------
+              if(CorotiontoInertial .eqv. .true.)then  
+                  Omega(1)=Omega0/Omegas                  
+                  Omega(2)=0.d0                 
+                  Omega(3)=0.d0  
+                  do k=1,N_ph_total(5)
+                      do j=1,N_th_total(5)
+                          do i=-1,nrt             
+                              posi(1)=xtotal5(i,j,k)                        
+                              posi(2)=ytotal5(i,j,k)                         
+                              posi(3)=ztotal5(i,j,k)                          
+                              OmgR(1) = Omega(2)*posi(3)-Omega(3)*posi(2)                        
+                              OmgR(2) = Omega(3)*posi(1)-Omega(1)*posi(3)                         
+                              OmgR(3) = Omega(1)*posi(2)-Omega(2)*posi(1)                          
+                              utotal_5(2:4,i,j,k)=utotal_5(2:4,i,j,k)+OmgR(1:3)
+                          end do
+                      end do
+                  end do 
+              end if
+              !----From corotation frame to inerrial coordinate system<<--------     
+             
+             write(cmype1 ,"(i1.1)") 5
+             if(resolution_scale==1)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'ori.h5'
+             else if(resolution_scale==2)then
+                 datafile='DATA'//trim(folder_Suffix)//ctime//'_'//cmype1//'skip1.h5'
+             end if
+             call ReadHDF5Serial(datafile, Variables_, time_, nyy_)
+             write(*,*)"nyy_=",nyy_,"time_=",time_
+             utotal_6(1:4,1:nrt,1:N_th_total(6),1:N_ph_total(6))=Variables_(1:4,1:nrt,1:N_th_total(6),1:N_ph_total(6)) ! rho, vx, vy, vz 
+             utotal_6(6,1:nrt,1:N_th_total(6),1:N_ph_total(6))=Variables_(5,1:nrt,1:N_th_total(6),1:N_ph_total(6)) ! pressure
+             B_6(1:3,1:nrt,1:N_th_total(6),1:N_ph_total(6))=Variables_(6:8,1:nrt,1:N_th_total(6),1:N_ph_total(6)) ! magnetic field Bx, By, Bz
+             utotal_6(5,1:nrt,1:N_th_total(6),1:N_ph_total(6))=Variables_(5,1:nrt,1:N_th_total(6),1:N_ph_total(6)) ! energy is not used
+             ii=6
+             do nrt_=-1,0
+                 utotal_6(1:6,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=utotal_6(1:6,1,1:N_th_total(ii),1:N_ph_total(ii))
+                 B_6(1:3,nrt_,1:N_th_total(ii),1:N_ph_total(ii))=B_6(1:3,1,1:N_th_total(ii),1:N_ph_total(ii))
+             end do
+             B1_6=0.d0
+             Ca_6=0.d0
+             Current_6=0.d0               
+             !-->>From corotation frame to inerrial coordinate system--------
+              if(CorotiontoInertial .eqv. .true.)then  
+                  Omega(1)=-Omega0/Omegas                 
+                  Omega(2)=0.d0               
+                  Omega(3)=0.d0  
+                  do k=1,N_ph_total(6)
+                      do j=1,N_th_total(6)
+                          do i=-1,nrt             
+                              posi(1)=xtotal6(i,j,k)                        
+                              posi(2)=ytotal6(i,j,k)                         
+                              posi(3)=ztotal6(i,j,k)                          
+                              OmgR(1) = Omega(2)*posi(3)-Omega(3)*posi(2)                        
+                              OmgR(2) = Omega(3)*posi(1)-Omega(1)*posi(3)                         
+                              OmgR(3) = Omega(1)*posi(2)-Omega(2)*posi(1)                          
+                              utotal_6(2:4,i,j,k)=utotal_6(2:4,i,j,k)+OmgR(1:3)
+                          end do
+                      end do
+                  end do 
+              end if
+
+4. example of interpolating magnetic field to the selected sample points:
+reference for the divergence-free RBF vector interpolation: 
+Implicit Solar Coronal Magnetohydrodynamic (MHD) Modeling with a Low-dissipation Hybridized AUSM-HLL Riemann Solver
+Wang, H. P., Xiang, C. Q., Liu, X. J., Lv, J. K., & Shen, F. 2022a, ApJ, 935, 46
+
+    subroutine sphB_interp(i,radius,usphinterp) 
+               
+    !Variables are denoted in Cartesian coordinate system. 1st-3rd corresponds to coordinate transformation.
+    !4th-5th corresponds to variables transformation.
+    !1st-Transfer global spherical coordinate system (radius,th1,ph1) to global Cartesian coordinate system (x1,y1,z1).
+    !2nd-Transfer (x1,y1,z1) to local Cartesian coordinate system (x_inter,y_inter,z_inter), 
+    !    and then transfer (x_inter,y_inter,z_inter) to local spherical coordinate system (r_l,theta_l,phi_l).
+    !3rd-Transfer the interpolation stencil from local Cartesian coordinate system (xtotal*,ytotal*,ztotal*) 
+    !    to local spherical coordinate system(radiuput(1:2),THput(1:2),PHIput(1:2)).
+    !4th-Interpolate variables at (r_l,theta_l,phi_l) in the local spherical coordinate system.
+    !5th-Transfer the interpolated variables from local Cartesian coordinate system to global Cartesian coordinate system.
+    !6th-Transfer the interpolated variables from global Cartesian coordinate system (x1,y1,z1) to global spherical coordinate system (radius,th1,ph1).        
+    !(x_inter,y_inter,z_inter): pont at which to be interpolated in local coordinate system.
+    !(x_local,y_local,z_local): the nearest pont in the interpolation stencil system.
+      implicit double precision(a-h,o-z)  
+      real*8,intent(out) :: usphinterp(15,1:N_th_p+2,1:N_ph_p+2)
+	  integer,intent(in)::i
+      real*8,intent(in)  :: radius
+      integer :: ii,iBOU,jBOU,kBOU,nyy,ivari,jj,m,n
+      real*8 :: pos_local(3),cen_nei(3,7),a_divB_rbf81(21,21),a_divB_rbf7(7,7),aB(21,21),wB(21),vB(21,21),a(7,7),w(7),v(7,7)
+      real*8 :: agspt_weightB_point(3,21),agspt_weight7_point(7),Vari_interp(7:12),bbrbf7_(7,7),wrbf7(7),vrbf7(7,7),bbrbf_(21,21),wrbf(21),vrbf(21,21)       
+      integer :: iBOU_n,jBOU_n,kBOU_n,iBOU_p,jBOU_p,kBOU_p,i_down,i_up
+      real*8 :: radiuput(1:2),THput(1:2),PHIput(1:2)
+      real*8 :: xyz(1:3,1:3,1:3,1:3),Bxyz(1:3,1:3,1:3,1:3)
+      c_rbf=10.d0
+      if(i==-1)then
+          i_down=-1
+          i_up=-1
+      else                  
+          i_down=i-1
+          i_up=i+1
+      end if
+          
+      j=0
+      k=0
+      do i1=1,N_th_P+2
+         th1=THETA11(i1-1)
+         do j1=1, N_ph_p+2
+            ph1=phi11(j1-1)
+            x1 =radius*dsin(th1)*dcos(ph1)
+            y1 =radius*dsin(th1)*dsin(ph1)
+            z1 =radius*dcos(th1)
+            detmin=100.
+            DO j=2,N_th_total(1)-1
+               DO k=2,N_ph_total(1)-1
+                   do ii=i_down,i_up
+                       pos_local(1)=x1
+                       pos_local(2)=y1
+                       pos_local(3)=z1
+                  x_yin=xtotal1(ii,j,k)
+                  y_yin=ytotal1(ii,j,k)
+                  z_yin=ztotal1(ii,j,k)
+                  radd=dsqrt((pos_local(1)-x_yin)**2+(pos_local(2)-y_yin)**2+(pos_local(3)-z_yin)**2)
+                  if(radd<detmin) then
+                     detmin=radd
+                     iBOU=ii
+                     jBOU=j
+                     kBOU=k
+                     x_local=x_yin; y_local=y_yin; z_local=z_yin
+                     x_inter=pos_local(1)
+                     y_inter=pos_local(2)
+                     z_inter=pos_local(3)
+                     nyy=0
+                  ENDIF
+                   end do                  
+               ENDDO
+            ENDDO
+	        DO j=2,N_th_total(2)-1
+               DO k=2,N_ph_total(2)-1
+                   do ii=i_down,i_up
+                       pos_local(1)=y1
+                       pos_local(2)=-x1
+                       pos_local(3)=z1
+                  x_yin=xtotal2(ii,j,k)
+                  y_yin=ytotal2(ii,j,k)
+                  z_yin=ztotal2(ii,j,k)
+                  radd=dsqrt((pos_local(1)-x_yin)**2+(pos_local(2)-y_yin)**2+(pos_local(3)-z_yin)**2)
+                  if(radd<detmin) then
+	                 detmin=radd
+                     iBOU=ii
+                     jBOU=j
+                     kBOU=k
+                     x_local=x_yin; y_local=y_yin; z_local=z_yin
+                     x_inter=pos_local(1)
+                     y_inter=pos_local(2)
+                     z_inter=pos_local(3)
+                     nyy=1
+                  ENDIF
+                  end do
+              ENDDO
+	       ENDDO
+ 	       DO j=2,N_th_total(3)-1
+               DO k=2,N_ph_total(3)-1
+                   do ii=i_down,i_up
+                       pos_local(1)=-x1
+                       pos_local(2)=-y1
+                       pos_local(3)=z1
+                  x_yin=xtotal3(ii,j,k)
+                  y_yin=ytotal3(ii,j,k)
+                  z_yin=ztotal3(ii,j,k)
+                  radd=dsqrt((pos_local(1)-x_yin)**2+(pos_local(2)-y_yin)**2+(pos_local(3)-z_yin)**2)
+                 if(radd<detmin) then
+	                detmin=radd
+                    iBOU=ii
+                    jBOU=j
+                    kBOU=k
+                    x_local=x_yin; y_local=y_yin; z_local=z_yin
+                    x_inter=pos_local(1)
+                     y_inter=pos_local(2)
+                     z_inter=pos_local(3)
+                    nyy=2
+                 ENDIF
+                 end do
+              ENDDO
+	       ENDDO
+ 	       DO j=2,N_th_total(4)-1
+               DO k=2,N_ph_total(4)-1
+                   do ii=i_down,i_up
+                       pos_local(1)=-y1
+                       pos_local(2)=x1
+                       pos_local(3)=z1
+                  x_yin=xtotal4(ii,j,k)
+                  y_yin=ytotal4(ii,j,k)
+                  z_yin=ztotal4(ii,j,k)
+                  radd=dsqrt((pos_local(1)-x_yin)**2+(pos_local(2)-y_yin)**2+(pos_local(3)-z_yin)**2)
+                 if(radd<detmin) then
+	                detmin=radd
+                    iBOU=ii
+                    jBOU=j
+                    kBOU=k
+                    x_local=x_yin; y_local=y_yin; z_local=z_yin
+                    x_inter=pos_local(1)
+                     y_inter=pos_local(2)
+                     z_inter=pos_local(3)
+                    nyy=3
+                 ENDIF
+                 end do
+              ENDDO
+	       ENDDO
+           DO j=2,N_th_total(5)-1
+               DO k=2,N_ph_total(5)-1
+                   do ii=i_down,i_up
+                       pos_local(1)=z1
+                       pos_local(2)=y1
+                       pos_local(3)=-x1
+                  x_yin=xtotal5(ii,j,k)
+                  y_yin=ytotal5(ii,j,k)
+                  z_yin=ztotal5(ii,j,k)
+                  radd=dsqrt((pos_local(1)-x_yin)**2+(pos_local(2)-y_yin)**2+(pos_local(3)-z_yin)**2)
+                 if(radd<detmin) then
+	                detmin=radd
+                    iBOU=ii
+                    jBOU=j
+                    kBOU=k
+                    x_local=x_yin; y_local=y_yin; z_local=z_yin
+                    x_inter=pos_local(1)
+                     y_inter=pos_local(2)
+                     z_inter=pos_local(3)
+                    nyy=4
+                 ENDIF
+                 end do
+              ENDDO
+	       ENDDO
+ 	       DO j=2,N_th_total(6)-1
+               DO k=2,N_ph_total(6)-1
+                   do ii=i_down,i_up
+                       pos_local(1)=-z1
+                       pos_local(2)=y1
+                       pos_local(3)=x1
+                  x_yin=xtotal6(ii,j,k)
+                  y_yin=ytotal6(ii,j,k)
+                  z_yin=ztotal6(ii,j,k)
+                  radd=dsqrt((pos_local(1)-x_yin)**2+(pos_local(2)-y_yin)**2+(pos_local(3)-z_yin)**2)
+                 if(radd<detmin) then
+	                detmin=radd
+                    iBOU=ii
+                    jBOU=j
+                    kBOU=k
+                    x_local=x_yin; y_local=y_yin; z_local=z_yin
+                    x_inter=pos_local(1)
+                     y_inter=pos_local(2)
+                     z_inter=pos_local(3)
+                    nyy=5
+                 ENDIF
+                 end do
+              ENDDO
+           ENDDO
+           !Variables are denoted in Cartesian coordinate system. 1st-3rd corresponds to coordinate transformation.
+           !4th-5th corresponds to variables transformation.
+           !1st-Transfer global spherical coordinate system (radius,th1,ph1) to global Cartesian coordinate system (x1,y1,z1).
+           !2nd-Transfer (x1,y1,z1) to local Cartesian coordinate system (x_inter,y_inter,z_inter), 
+           !    and then transfer (x_inter,y_inter,z_inter) to local spherical coordinate system (r_l,theta_l,phi_l).
+           !3rd-Transfer the interpolation stencil from local Cartesian coordinate system (xtotal*,ytotal*,ztotal*) 
+           !    to local spherical coordinate system(radiuput(1:2),THput(1:2),PHIput(1:2)).
+           !4th-Interpolate variables at (r_l,theta_l,phi_l) in the local spherical coordinate system.
+           !5th-Transfer the interpolated variables from local Cartesian coordinate system to global Cartesian coordinate system.
+           !6th-Transfer the interpolated variables from global Cartesian coordinate system (x1,y1,z1) to global spherical coordinate system (radius,th1,ph1).        
+           !(x_inter,y_inter,z_inter): pont at which to be interpolated in local coordinate system.
+           !(x_local,y_local,z_local): the nearest pont in the interpolation stencil system.
+           call coordinate_xyz_rtp(r_l,theta_l,phi_l,x_inter,y_inter,z_inter)
+           call coordinate_xyz_rtp(r_nearby,theta_nearby,phi_nearby,x_local,y_local,z_local)
+           if(r_l>r_nearby)then
+               iBOU_n=iBOU
+               iBOU_p=iBOU+1
+           else
+               iBOU_n=iBOU-1
+               iBOU_p=iBOU
+           end if
+           
+           if(i==-1)then
+               iBOU_n=iBOU
+               iBOU_p=iBOU
+           else
+           end if
+               
+           if(theta_l>theta_nearby)then
+               jBOU_n=jBOU
+               jBOU_p=jBOU+1
+           else
+               jBOU_n=jBOU-1
+               jBOU_p=jBOU
+           end if
+           if(phi_l>phi_nearby)then
+               kBOU_n=kBOU
+               kBOU_p=kBOU+1
+           else                           
+               kBOU_n=kBOU-1
+               kBOU_p=kBOU
+           end if
+           
+           th0=th1
+           ph0=ph1
+           !radii = dsqrt(x1**2.0+y1**2.0+z1**2.0)             
+           !rxy = dsqrt(x1**2+y1**2)            
+           !if(y1.gt.0.d0) then           
+           !    ph0 = dacos(x1/rxy)            
+           !else            
+           !    ph0 = 2.d0*pi-dacos(x1/rxy)            
+           !end if            
+           !th0 = dacos(z1/radii)                       
+           
+           if(nyy==0) then
+               if(i==-1 .or. iBOU .le. -1)then
+               radiuput(1)=dsqrt(xtotal1(iBOU_n,jBOU,kBOU)**2.d0+ytotal1(iBOU_n,jBOU,kBOU)**2.d0+ztotal1(iBOU_n,jBOU,kBOU)**2.d0)
+               radiuput(2)=dsqrt(xtotal1(iBOU_p,jBOU,kBOU)**2.d0+ytotal1(iBOU_p,jBOU,kBOU)**2.d0+ztotal1(iBOU_p,jBOU,kBOU)**2.d0)               
+               call coordinate_xyz_rtp(r_nearby,THput(1),phi_nearby,xtotal1(iBOU,jBOU_n,kBOU),ytotal1(iBOU,jBOU_n,kBOU),ztotal1(iBOU,jBOU_n,kBOU))
+               call coordinate_xyz_rtp(r_nearby,THput(2),phi_nearby,xtotal1(iBOU,jBOU_p,kBOU),ytotal1(iBOU,jBOU_p,kBOU),ztotal1(iBOU,jBOU_p,kBOU))
+               call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(1),xtotal1(iBOU,jBOU,kBOU_n),ytotal1(iBOU,jBOU,kBOU_n),ztotal1(iBOU,jBOU,kBOU_n))
+               call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(2),xtotal1(iBOU,jBOU,kBOU_p),ytotal1(iBOU,jBOU,kBOU_p),ztotal1(iBOU,jBOU,kBOU_p))
+               end if   
+               if(i==-1)then                                  
+                   do ivari=7,9                   
+                       call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B_1(ivari-6,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   end do                
+                   !do ivari=10,12                  
+                   !    call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B1_1(ivari-9,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))             
+                   !end do                      
+               else if(iBOU>-1)then              
+                   xyz(1:3,1:3,1:3,1)=xtotal1(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   xyz(1:3,1:3,1:3,2)=ytotal1(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,3)=ztotal1(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   Bxyz(1:3,1:3,1:3,1)=B_1(1,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,2)=B_1(2,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)            
+                   Bxyz(1:3,1:3,1:3,3)=B_1(3,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   call vecRBFinterp3D(xyz(1:3,1:3,1:3,1:3),Bxyz(1:3,1:3,1:3,1:3),x_inter,y_inter,z_inter,Vari_interp(7:9))   
+                   !               do ivari=7,9 
+                   !                   call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_1(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))
+                   !                 !  Vari_interp(ivari)=B_1(ivari-6,iBOU,jBOU,kBOU)
+                   !               end do               
+                   !do ivari=10,12                   
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_1(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))               
+                   !    !  Vari_interp(ivari)=B1_1(ivari-9,iBOU,jBOU,kBOU)               
+                   !end do                    
+               else              
+                   do ivari=7,9                  
+                       call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_1(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))               
+                       !  Vari_interp(ivari)=B_1(ivari-6,iBOU,jBOU,kBOU)             
+                   end do                
+                   !do ivari=10,12                 
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_1(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))               
+                   !    !  Vari_interp(ivari)=B1_1(ivari-9,iBOU,jBOU,kBOU)             
+                   !end do                   
+               end if                                                         
+           elseif(nyy==1) then               
+               if(i==-1 .or. iBOU .le. -1)then              
+                   radiuput(1)=dsqrt(xtotal2(iBOU_n,jBOU,kBOU)**2.d0+ytotal2(iBOU_n,jBOU,kBOU)**2.d0+ztotal2(iBOU_n,jBOU,kBOU)**2.d0)               
+                   radiuput(2)=dsqrt(xtotal2(iBOU_p,jBOU,kBOU)**2.d0+ytotal2(iBOU_p,jBOU,kBOU)**2.d0+ztotal2(iBOU_p,jBOU,kBOU)**2.d0)                              
+                   call coordinate_xyz_rtp(r_nearby,THput(1),phi_nearby,xtotal2(iBOU,jBOU_n,kBOU),ytotal2(iBOU,jBOU_n,kBOU),ztotal2(iBOU,jBOU_n,kBOU))              
+                   call coordinate_xyz_rtp(r_nearby,THput(2),phi_nearby,xtotal2(iBOU,jBOU_p,kBOU),ytotal2(iBOU,jBOU_p,kBOU),ztotal2(iBOU,jBOU_p,kBOU))              
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(1),xtotal2(iBOU,jBOU,kBOU_n),ytotal2(iBOU,jBOU,kBOU_n),ztotal2(iBOU,jBOU,kBOU_n))              
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(2),xtotal2(iBOU,jBOU,kBOU_p),ytotal2(iBOU,jBOU,kBOU_p),ztotal2(iBOU,jBOU,kBOU_p))             
+               end if
+                 
+               if(i==-1)then                                 
+                   do ivari=7,9                   
+                       call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B_2(ivari-6,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))             
+                   end do                
+                   !do ivari=10,12                  
+                   !    call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B1_2(ivari-9,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))             
+                   !end do                       
+               else if(iBOU>-1)then              
+                   xyz(1:3,1:3,1:3,1)=xtotal2(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,2)=ytotal2(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,3)=ztotal2(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,1)=B_2(1,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,2)=B_2(2,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   Bxyz(1:3,1:3,1:3,3)=B_2(3,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   call vecRBFinterp3D(xyz(1:3,1:3,1:3,1:3),Bxyz(1:3,1:3,1:3,1:3),x_inter,y_inter,z_inter,Vari_interp(7:9))                 
+                   !              do ivari=7,9 
+                   !                  call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_2(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))
+                   !                !  Vari_interp(ivari)=B_2(ivari-6,iBOU,jBOU,kBOU)
+                   !              end do               
+                   !do ivari=10,12                 
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_2(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   !    !   Vari_interp(ivari)=B1_2(ivari-9,iBOU,jBOU,kBOU)             
+                   !end do           
+               else             
+                   do ivari=7,9               
+                       call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_2(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                       !  Vari_interp(ivari)=B_2(ivari-6,iBOU,jBOU,kBOU)             
+                   end do                
+                   !do ivari=10,12                 
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_2(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))               
+                   !    !   Vari_interp(ivari)=B1_2(ivari-9,iBOU,jBOU,kBOU)              
+                   !end do      
+               end if          
+           elseif(nyy==2) then
+               if(i==-1 .or. iBOU .le. -1)then              
+                   radiuput(1)=dsqrt(xtotal3(iBOU_n,jBOU,kBOU)**2.d0+ytotal3(iBOU_n,jBOU,kBOU)**2.d0+ztotal3(iBOU_n,jBOU,kBOU)**2.d0)              
+                   radiuput(2)=dsqrt(xtotal3(iBOU_p,jBOU,kBOU)**2.d0+ytotal3(iBOU_p,jBOU,kBOU)**2.d0+ztotal3(iBOU_p,jBOU,kBOU)**2.d0)                             
+                   call coordinate_xyz_rtp(r_nearby,THput(1),phi_nearby,xtotal3(iBOU,jBOU_n,kBOU),ytotal3(iBOU,jBOU_n,kBOU),ztotal3(iBOU,jBOU_n,kBOU))               
+                   call coordinate_xyz_rtp(r_nearby,THput(2),phi_nearby,xtotal3(iBOU,jBOU_p,kBOU),ytotal3(iBOU,jBOU_p,kBOU),ztotal3(iBOU,jBOU_p,kBOU))               
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(1),xtotal3(iBOU,jBOU,kBOU_n),ytotal3(iBOU,jBOU,kBOU_n),ztotal3(iBOU,jBOU,kBOU_n))               
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(2),xtotal3(iBOU,jBOU,kBOU_p),ytotal3(iBOU,jBOU,kBOU_p),ztotal3(iBOU,jBOU,kBOU_p))
+               end if              
+                   
+               if(i==-1)then                                
+                   do ivari=7,9                   
+                       call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B_3(ivari-6,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))             
+                   end do                
+                   !do ivari=10,12                  
+                   !    call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B1_3(ivari-9,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))             
+                   !end do           
+               else if(iBOU>-1)then              
+                   xyz(1:3,1:3,1:3,1)=xtotal3(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,2)=ytotal3(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,3)=ztotal3(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)               
+                   Bxyz(1:3,1:3,1:3,1)=B_3(1,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   Bxyz(1:3,1:3,1:3,2)=B_3(2,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   Bxyz(1:3,1:3,1:3,3)=B_3(3,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   call vecRBFinterp3D(xyz(1:3,1:3,1:3,1:3),Bxyz(1:3,1:3,1:3,1:3),x_inter,y_inter,z_inter,Vari_interp(7:9))                 
+                   !              do ivari=7,9 
+                   !                  call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_3(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))
+                   !               !   Vari_interp(ivari)=B_3(ivari-6,iBOU,jBOU,kBOU)
+                   !              end do                
+                   !do ivari=10,12                  
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_3(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   !    !   Vari_interp(ivari)=B1_3(ivari-9,iBOU,jBOU,kBOU)             
+                   !end do            
+               else                              
+                   do ivari=7,9                  
+                       call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_3(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                       !   Vari_interp(ivari)=B_3(ivari-6,iBOU,jBOU,kBOU)              
+                   end do                
+                   !do ivari=10,12                 
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_3(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   !    !   Vari_interp(ivari)=B1_3(ivari-9,iBOU,jBOU,kBOU)              
+                   !end do      
+               end if          
+           elseif(nyy==3) then
+               if(i==-1 .or. iBOU .le. -1)then             
+                   radiuput(1)=dsqrt(xtotal4(iBOU_n,jBOU,kBOU)**2.d0+ytotal4(iBOU_n,jBOU,kBOU)**2.d0+ztotal4(iBOU_n,jBOU,kBOU)**2.d0)              
+                   radiuput(2)=dsqrt(xtotal4(iBOU_p,jBOU,kBOU)**2.d0+ytotal4(iBOU_p,jBOU,kBOU)**2.d0+ztotal4(iBOU_p,jBOU,kBOU)**2.d0)                            
+                   call coordinate_xyz_rtp(r_nearby,THput(1),phi_nearby,xtotal4(iBOU,jBOU_n,kBOU),ytotal4(iBOU,jBOU_n,kBOU),ztotal4(iBOU,jBOU_n,kBOU))             
+                   call coordinate_xyz_rtp(r_nearby,THput(2),phi_nearby,xtotal4(iBOU,jBOU_p,kBOU),ytotal4(iBOU,jBOU_p,kBOU),ztotal4(iBOU,jBOU_p,kBOU))             
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(1),xtotal4(iBOU,jBOU,kBOU_n),ytotal4(iBOU,jBOU,kBOU_n),ztotal4(iBOU,jBOU,kBOU_n))             
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(2),xtotal4(iBOU,jBOU,kBOU_p),ytotal4(iBOU,jBOU,kBOU_p),ztotal4(iBOU,jBOU,kBOU_p))             
+               end if
+  
+               if(i==-1)then                                 
+                   do ivari=7,9                  
+                       call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B_4(ivari-6,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   end do                
+                   !do ivari=10,12                  
+                   !    call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B1_4(ivari-9,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))               
+                   !end do     
+               else if(iBOU>-1)then            
+                   xyz(1:3,1:3,1:3,1)=xtotal4(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)            
+                   xyz(1:3,1:3,1:3,2)=ytotal4(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,3)=ztotal4(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   Bxyz(1:3,1:3,1:3,1)=B_4(1,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,2)=B_4(2,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,3)=B_4(3,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   call vecRBFinterp3D(xyz(1:3,1:3,1:3,1:3),Bxyz(1:3,1:3,1:3,1:3),x_inter,y_inter,z_inter,Vari_interp(7:9))                  
+                   !               do ivari=7,9 
+                   !                   call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_4(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))
+                   !                !   Vari_interp(ivari)=B_4(ivari-6,iBOU,jBOU,kBOU)
+                   !               end do                
+                   !do ivari=10,12                  
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_4(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   !    !   Vari_interp(ivari)=B1_4(ivari-9,iBOU,jBOU,kBOU)              
+                   !end do            
+               else                            
+                   do ivari=7,9                  
+                       call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_4(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))               
+                       !   Vari_interp(ivari)=B_4(ivari-6,iBOU,jBOU,kBOU)              
+                   end do               
+                   !do ivari=10,12                  
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_4(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   !    !   Vari_interp(ivari)=B1_4(ivari-9,iBOU,jBOU,kBOU)              
+                   !end do      
+               end if         
+           elseif(nyy==4) then
+               if(i==-1 .or. iBOU .le. -1)then             
+                   radiuput(1)=dsqrt(xtotal5(iBOU_n,jBOU,kBOU)**2.d0+ytotal5(iBOU_n,jBOU,kBOU)**2.d0+ztotal5(iBOU_n,jBOU,kBOU)**2.d0)             
+                   radiuput(2)=dsqrt(xtotal5(iBOU_p,jBOU,kBOU)**2.d0+ytotal5(iBOU_p,jBOU,kBOU)**2.d0+ztotal5(iBOU_p,jBOU,kBOU)**2.d0)                            
+                   call coordinate_xyz_rtp(r_nearby,THput(1),phi_nearby,xtotal5(iBOU,jBOU_n,kBOU),ytotal5(iBOU,jBOU_n,kBOU),ztotal5(iBOU,jBOU_n,kBOU))              
+                   call coordinate_xyz_rtp(r_nearby,THput(2),phi_nearby,xtotal5(iBOU,jBOU_p,kBOU),ytotal5(iBOU,jBOU_p,kBOU),ztotal5(iBOU,jBOU_p,kBOU))              
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(1),xtotal5(iBOU,jBOU,kBOU_n),ytotal5(iBOU,jBOU,kBOU_n),ztotal5(iBOU,jBOU,kBOU_n))              
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(2),xtotal5(iBOU,jBOU,kBOU_p),ytotal5(iBOU,jBOU,kBOU_p),ztotal5(iBOU,jBOU,kBOU_p))
+               end if
+                
+               if(i==-1)then                                  
+                   do ivari=7,9                  
+                       call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B_5(ivari-6,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   end do                
+                   !do ivari=10,12                   
+                   !    call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B1_5(ivari-9,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))             
+                   !end do       
+               else if(iBOU>-1)then             
+                   xyz(1:3,1:3,1:3,1)=xtotal5(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,2)=ytotal5(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   xyz(1:3,1:3,1:3,3)=ztotal5(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,1)=B_5(1,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,2)=B_5(2,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,3)=B_5(3,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   call vecRBFinterp3D(xyz(1:3,1:3,1:3,1:3),Bxyz(1:3,1:3,1:3,1:3),x_inter,y_inter,z_inter,Vari_interp(7:9))                 
+                   !               do ivari=7,9 
+                   !                   call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_5(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))
+                   !               !    Vari_interp(ivari)=B_5(ivari-6,iBOU,jBOU,kBOU)
+                   !               end do                
+                   !do ivari=10,12                   
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_5(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))               
+                   !    !   Vari_interp(ivari)=B1_5(ivari-9,iBOU,jBOU,kBOU)              
+                   !end do            
+               else                             
+                   do ivari=7,9                  
+                       call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_5(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                       !    Vari_interp(ivari)=B_5(ivari-6,iBOU,jBOU,kBOU)              
+                   end do               
+                   !do ivari=10,12                   
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_5(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   !    !   Vari_interp(ivari)=B1_5(ivari-9,iBOU,jBOU,kBOU)              
+                   !end do       
+               end if          
+           elseif(nyy==5) then
+               if(i==-1 .or. iBOU .le. -1)then              
+                   radiuput(1)=dsqrt(xtotal6(iBOU_n,jBOU,kBOU)**2.d0+ytotal6(iBOU_n,jBOU,kBOU)**2.d0+ztotal6(iBOU_n,jBOU,kBOU)**2.d0)              
+                   radiuput(2)=dsqrt(xtotal6(iBOU_p,jBOU,kBOU)**2.d0+ytotal6(iBOU_p,jBOU,kBOU)**2.d0+ztotal6(iBOU_p,jBOU,kBOU)**2.d0)                            
+                   call coordinate_xyz_rtp(r_nearby,THput(1),phi_nearby,xtotal6(iBOU,jBOU_n,kBOU),ytotal6(iBOU,jBOU_n,kBOU),ztotal6(iBOU,jBOU_n,kBOU))              
+                   call coordinate_xyz_rtp(r_nearby,THput(2),phi_nearby,xtotal6(iBOU,jBOU_p,kBOU),ytotal6(iBOU,jBOU_p,kBOU),ztotal6(iBOU,jBOU_p,kBOU))              
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(1),xtotal6(iBOU,jBOU,kBOU_n),ytotal6(iBOU,jBOU,kBOU_n),ztotal6(iBOU,jBOU,kBOU_n))              
+                   call coordinate_xyz_rtp(r_nearby,theta_nearby,PHIput(2),xtotal6(iBOU,jBOU,kBOU_p),ytotal6(iBOU,jBOU,kBOU_p),ztotal6(iBOU,jBOU,kBOU_p))
+               end if    
+               if(i==-1)then                                
+                   do ivari=7,9                   
+                       call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B_6(ivari-6,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))             
+                   end do                
+                   !do ivari=10,12                   
+                   !    call Lagrange_2D(THput(1:2),PHIput(1:2),theta_l,phi_l,B1_6(ivari-9,iBOU,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))               
+                   !end do          
+               else if(iBOU>-1)then             
+                   xyz(1:3,1:3,1:3,1)=xtotal6(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,2)=ytotal6(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   xyz(1:3,1:3,1:3,3)=ztotal6(iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,1)=B_6(1,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   Bxyz(1:3,1:3,1:3,2)=B_6(2,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)              
+                   Bxyz(1:3,1:3,1:3,3)=B_6(3,iBOU-1:iBOU+1,jBOU-1:jBOU+1,kBOU-1:kBOU+1)             
+                   call vecRBFinterp3D(xyz(1:3,1:3,1:3,1:3),Bxyz(1:3,1:3,1:3,1:3),x_inter,y_inter,z_inter,Vari_interp(7:9))                  
+                   !               do ivari=7,9 
+                   !                   call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_6(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))
+                   !               !    Vari_interp(ivari)=B_6(ivari-6,iBOU,jBOU,kBOU)
+                   !               end do               
+                   !do ivari=10,12                   
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_6(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                   !    !    Vari_interp(ivari)=B1_6(ivari-9,iBOU,jBOU,kBOU)              
+                   !end do            
+               else                           
+                   do ivari=7,9                    
+                       call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B_6(ivari-6,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))              
+                       !    Vari_interp(ivari)=B_6(ivari-6,iBOU,jBOU,kBOU)              
+                   end do                
+                   !do ivari=10,12                  
+                   !    call Lagrange_3D(radiuput(1:2),THput(1:2),PHIput(1:2),r_l,theta_l,phi_l,B1_6(ivari-9,iBOU_n:iBOU_p,jBOU_n:jBOU_p,kBOU_n:kBOU_p),Vari_interp(ivari))             
+                   !    !    Vari_interp(ivari)=B1_6(ivari-9,iBOU,jBOU,kBOU)             
+                   !end do      
+               end if
+           endif                       
+      
+      if(nyy==0) then            
+          Bx=Vari_interp(7)           
+          By=Vari_interp(8)          
+          Bz=Vari_interp(9)           
+          !B1x=Vari_interp(10)            
+          !B1y=Vari_interp(11)            
+          !B1z=Vari_interp(12)        
+      elseif(nyy==1) then                             
+          Bx=-Vari_interp(8)           
+          By=Vari_interp(7)          
+          Bz=Vari_interp(9)           
+          !B1x=-Vari_interp(11)            
+          !B1y=Vari_interp(10)            
+          !B1z=Vari_interp(12)             
+      elseif(nyy==2) then        
+          Bx=-Vari_interp(7)           
+          By=-Vari_interp(8)          
+          Bz=Vari_interp(9)           
+          !B1x=-Vari_interp(10)            
+          !B1y=-Vari_interp(11)            
+          !B1z=Vari_interp(12)       		  
+      elseif(nyy==3) then         
+          Bx=Vari_interp(8)           
+          By=-Vari_interp(7)          
+          Bz=Vari_interp(9)           
+          !B1x=Vari_interp(11)            
+          !B1y=-Vari_interp(10)            
+          !B1z=Vari_interp(12)             
+      elseif(nyy==4) then            
+          Bx=-Vari_interp(9)           
+          By=Vari_interp(8)          
+          Bz=Vari_interp(7)           
+          !B1x=-Vari_interp(12)            
+          !B1y=Vari_interp(11)            
+          !B1z=Vari_interp(10)                 
+      elseif(nyy==5) then          
+          Bx=Vari_interp(9)           
+          By=Vari_interp(8)          
+          Bz=-Vari_interp(7)           
+          !B1x=Vari_interp(12)            
+          !B1y=Vari_interp(11)            
+          !B1z=-Vari_interp(10)   
+      end if
+              call xyz_rtp(th0,ph0,Bx,By,Bz,Br,Bth,Bph)
+              !call xyz_rtp(th0,ph0,B1x,B1y,B1z,B1r,B1th,B1ph)
+              usphinterp(1,i1,j1)=x1
+              usphinterp(2,i1,j1)=y1
+              usphinterp(3,i1,j1)=z1
+              usphinterp(4,i1,j1)=Br
+              usphinterp(5,i1,j1)=Bth
+              usphinterp(6,i1,j1)=Bph
+              usphinterp(7,i1,j1)=Bx
+              usphinterp(8,i1,j1)=By
+              usphinterp(9,i1,j1)=Bz
+              !usphinterp(10,i1,j1)=B1x  !20201231
+              !usphinterp(11,i1,j1)=B1y
+              !usphinterp(12,i1,j1)=B1z
+              !usphinterp(13,i1,j1)=B1r
+              !usphinterp(14,i1,j1)=B1th
+              !usphinterp(15,i1,j1)=B1ph
+        enddo !j1:1, N_ph_p+2
+     enddo !i1:1,N_th_P+2
+
+    end subroutine sphB_interp 
