@@ -1,7 +1,10 @@
 import os
 import re
+
 import cv2
 from PIL import Image
+
+from config import FULL_SLICE_DIR
 
 
 def extract_time_from_filename(filename):
@@ -233,7 +236,7 @@ def image2video(
     )
 
 
-root_dir = "F:/Data/SIP-IFVM/slices/82d1to132/"
+root_dir = FULL_SLICE_DIR / "82d1to132"
 sub_dir = "vr"
 
 image_dir = os.path.join(

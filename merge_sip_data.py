@@ -44,13 +44,13 @@ Important:
     original usph(5) temperature variable.
 
 Default input:
-    E:/Research/Data/SIP-IFVM/output/
+    DATA_DIR
         82_00_0skip1.h5
         ...
         82_00_5skip1.h5
 
 Default output:
-    E:/Research/Data/SIP-IFVM/output/
+    OUTPUT_DIR
         82_00_merged_spherical.h5
 """
 
@@ -64,8 +64,9 @@ import h5py
 import numpy as np
 from scipy.spatial import cKDTree
 
+from config import FULL_MERGED_DIR, FULL_SOLUTION_DIR, GRID_DIR, GRID_FILE
+
 from merge_sip_grid import (
-    GRID_DIR,
     GRID_PATTERN,
     HDF5Layout,
     GridComponent,
@@ -80,14 +81,13 @@ from merge_sip_grid import (
 # Configuration
 # ======================================================================
 
-# OUTPUT_DIR = Path(r"E:/Research/Data/SIP-IFVM/solutions")
-# MERGED_DIR = Path(r"E:/Research/Data/SIP-IFVM/merged")
-
-OUTPUT_DIR = Path(r"F:/Simulation/SIP-IFVM/solutions/132d1to182")
-MERGED_DIR = Path(r"F:/Simulation/SIP-IFVM/merged/132d1to182")
+PROCESS_MODE = "all"
+DATA_DIR = FULL_SOLUTION_DIR / "132d1to182"
+SINGLE_TIME_TAG = "132_10"
+OUTPUT_DIR = FULL_MERGED_DIR / "132d1to182"
 
 PHYSICS_PATTERN = "{time_tag}_{component}skip1.h5"
-MERGED_GRID_FILE = GRID_DIR / "merged_spherical_grid.h5"
+MERGED_GRID_FILE = GRID_FILE
 
 K_NEIGHBORS = 27
 IDW_POWER = 2.0
@@ -165,7 +165,7 @@ def read_physics_component(
 
 def read_all_physics_components(
     grids: Sequence[GridComponent],
-    output_dir: Path = OUTPUT_DIR,
+    data_dir: Path = DATA_DIR,
     time_tag: str = "",
     pattern: str = PHYSICS_PATTERN,
 ) -> Tuple[List[np.ndarray], float | None]:
@@ -176,7 +176,7 @@ def read_all_physics_components(
     times = []
 
     for component in range(6):
-        filename = output_dir / pattern.format(
+        filename = data_dir / pattern.format(
             time_tag=time_tag,
             component=component,
         )
@@ -913,13 +913,13 @@ def save_merged_physics(
 # ======================================================================
 
 def discover_time_tags(
-    output_dir: Path = OUTPUT_DIR,
+    data_dir: Path = DATA_DIR,
 ) -> list[str]:
     """
     Find all files matching xx_yy_0skip1.h5 and extract xx_yy as TIME_TAG.
     """
-    if not output_dir.exists():
-        raise FileNotFoundError(output_dir)
+    if not data_dir.exists():
+        raise FileNotFoundError(data_dir)
 
     pattern = re.compile(
         r"^(\d+)_([0-9]{2})_0skip1\.h5$"
@@ -927,7 +927,7 @@ def discover_time_tags(
 
     tags = []
 
-    for filename in output_dir.iterdir():
+    for filename in data_dir.iterdir():
         if not filename.is_file():
             continue
 
@@ -948,16 +948,40 @@ def discover_time_tags(
     )
 
 
+def select_time_tags(
+    data_dir: Path = DATA_DIR,
+    process_mode: str = PROCESS_MODE,
+    single_time_tag: str = SINGLE_TIME_TAG,
+) -> list[str]:
+    """Select one time tag or all discovered time tags."""
+    mode = str(process_mode).strip().lower()
+
+    if mode == "single":
+        if re.fullmatch(r"\d+_[0-9]{2}", single_time_tag) is None:
+            raise ValueError(
+                f"Invalid SINGLE_TIME_TAG={single_time_tag!r}. "
+                "Expected a value such as '82_00'."
+            )
+        return [single_time_tag]
+
+    if mode == "all":
+        return discover_time_tags(data_dir)
+
+    raise ValueError(
+        f"Unknown PROCESS_MODE={process_mode!r}. Use 'single' or 'all'."
+    )
+
+
 def component_files_for_time_tag(
     time_tag: str,
-    output_dir: Path = OUTPUT_DIR,
+    data_dir: Path = DATA_DIR,
     pattern: str = PHYSICS_PATTERN,
 ) -> list[Path]:
     """
     Return the six expected component files for one TIME_TAG.
     """
     return [
-        output_dir / pattern.format(
+        data_dir / pattern.format(
             time_tag=time_tag,
             component=component,
         )
@@ -967,7 +991,7 @@ def component_files_for_time_tag(
 
 def check_complete_time_tag(
     time_tag: str,
-    output_dir: Path = OUTPUT_DIR,
+    data_dir: Path = DATA_DIR,
     pattern: str = PHYSICS_PATTERN,
 ) -> tuple[bool, list[Path]]:
     """
@@ -975,7 +999,7 @@ def check_complete_time_tag(
     """
     expected = component_files_for_time_tag(
         time_tag,
-        output_dir=output_dir,
+        data_dir=data_dir,
         pattern=pattern,
     )
 
@@ -1006,7 +1030,7 @@ def main():
             "Run merge_sip_grid_202608260058.py first."
         )
 
-    MERGED_DIR.mkdir(
+    OUTPUT_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
@@ -1017,15 +1041,16 @@ def main():
         pattern=GRID_PATTERN,
     )
 
-    # Discover all TIME_TAG values from xx_yy_0skip1.h5.
-    time_tags = discover_time_tags(
-        OUTPUT_DIR
+    time_tags = select_time_tags(
+        data_dir=DATA_DIR,
+        process_mode=PROCESS_MODE,
+        single_time_tag=SINGLE_TIME_TAG,
     )
 
     if not time_tags:
         raise FileNotFoundError(
             "No files matching xx_yy_0skip1.h5 were found in:\n"
-            f"{OUTPUT_DIR}"
+            f"{DATA_DIR}"
         )
 
     print("\nDiscovered TIME_TAG values:")
@@ -1050,7 +1075,7 @@ def main():
         print("=" * 72)
 
         output_file = (
-            MERGED_DIR
+            OUTPUT_DIR
             / f"{time_tag}_merged_spherical.h5"
         )
 
@@ -1067,7 +1092,7 @@ def main():
 
         complete, missing = check_complete_time_tag(
             time_tag,
-            output_dir=OUTPUT_DIR,
+            data_dir=DATA_DIR,
             pattern=PHYSICS_PATTERN,
         )
 
@@ -1085,7 +1110,7 @@ def main():
         physics, simulation_time = (
             read_all_physics_components(
                 grids,
-                output_dir=OUTPUT_DIR,
+                data_dir=DATA_DIR,
                 time_tag=time_tag,
                 pattern=PHYSICS_PATTERN,
             )
@@ -1119,7 +1144,9 @@ def main():
     print("Batch merge finished.")
     print(f"Completed: {len(completed)}")
     print(f"Skipped:   {len(skipped)}")
-    print(f"Output directory:\n{MERGED_DIR}")
+    print(f"Processing mode: {PROCESS_MODE}")
+    print(f"Input directory:\n{DATA_DIR}")
+    print(f"Output directory:\n{OUTPUT_DIR}")
 
     if skipped:
         print("\nSkipped TIME_TAG values:")

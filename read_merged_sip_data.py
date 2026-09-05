@@ -4,10 +4,10 @@ read_merged_sip_data_202608260058.py
 Read the new separated SIP-IFVM merged-data structure:
 
 Static grid file:
-    E:/Research/Data/SIP-IFVM/grid/merged_spherical_grid.h5
+    config.GRID_FILE
 
 Time-dependent physical-data file:
-    E:/Research/Data/SIP-IFVM/merged/82_00_merged_spherical.h5
+    config.LOCAL_MERGED_DIR / "82_00_merged_spherical.h5"
 
 The static grid is saved only once and provides:
     r, theta, phi
@@ -40,24 +40,91 @@ phi is longitude in radians:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Sequence
+import re
 
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
+
+from config import GRID_FILE, LOCAL_MERGED_DIR
 
 
 # ----------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------
 
-GRID_FILE = Path(
-    r"E:\Research\Data\SIP-IFVM\grid\merged_spherical_grid.h5"
+DATA_FILE = LOCAL_MERGED_DIR / "82_00_merged_spherical.h5"
+
+MERGED_DATA_FILENAME_PATTERN = re.compile(
+    r"^(\d+)_([0-9]{2})_merged_spherical\.h5$"
 )
 
-DATA_FILE = Path(
-    r"E:\Research\Data\SIP-IFVM\merged\82_00_merged_spherical.h5"
-)
+
+def simulation_hours_from_filename(filename: Path) -> float:
+    """Return simulation time [h] encoded in a merged-data filename."""
+    filename = Path(filename)
+    match = MERGED_DATA_FILENAME_PATTERN.fullmatch(filename.name)
+
+    if match is None:
+        raise ValueError(
+            f'Cannot parse simulation time from "{filename.name}". '
+            'Expected "xx_yy_merged_spherical.h5".'
+        )
+
+    return int(match.group(1)) + int(match.group(2)) / 100.0
+
+
+def discover_merged_data_files(data_dir: Path) -> list[Path]:
+    """Discover merged HDF5 files and sort them by simulation time."""
+    data_dir = Path(data_dir)
+
+    if not data_dir.is_dir():
+        raise FileNotFoundError(data_dir)
+
+    files = [
+        filename
+        for filename in data_dir.iterdir()
+        if filename.is_file()
+        and MERGED_DATA_FILENAME_PATTERN.fullmatch(filename.name)
+    ]
+    return sorted(files, key=simulation_hours_from_filename)
+
+
+def select_merged_data_files(
+    data_dir: Path,
+    process_mode: str,
+    single_filename: str | Path,
+) -> list[Path]:
+    """Select one merged file or every valid merged file in a directory."""
+    data_dir = Path(data_dir)
+    mode = str(process_mode).strip().lower()
+
+    if mode == "single":
+        single_path = Path(single_filename)
+        filename = single_path if single_path.is_absolute() else data_dir / single_path
+
+        if not filename.is_file():
+            raise FileNotFoundError(filename)
+        if MERGED_DATA_FILENAME_PATTERN.fullmatch(filename.name) is None:
+            raise ValueError(
+                f'Invalid merged-data filename "{filename.name}". '
+                'Expected "xx_yy_merged_spherical.h5".'
+            )
+        return [filename]
+
+    if mode == "all":
+        files = discover_merged_data_files(data_dir)
+        if not files:
+            raise FileNotFoundError(
+                "No files matching 'xx_yy_merged_spherical.h5' were found in:\n"
+                f"{data_dir}"
+            )
+        return files
+
+    raise ValueError(
+        f"Unknown PROCESS_MODE={process_mode!r}. Use 'single' or 'all'."
+    )
 
 
 # ----------------------------------------------------------------------
@@ -247,6 +314,7 @@ def read_merged_physics(
     grid_filename: Path = GRID_FILE,
     load_cartesian_coordinates: bool = False,
     load_component_map: bool = True,
+    field_names: Sequence[str] | None = None,
 ) -> Dict[str, Any]:
     """
     Read one time-dependent merged physical-data file and combine it with
@@ -266,6 +334,10 @@ def read_merged_physics(
 
     load_component_map
         If True and source_component exists in the grid file, include it.
+
+    field_names
+        Physical fields to load. None loads all fields. Valid names are
+        n, nrho_cm-3, rho_cm-3, P, vr, vtheta, vphi, Br, Btheta and Bphi.
 
     Returns
     -------
@@ -310,6 +382,27 @@ def read_merged_physics(
         "Btheta": "Btheta",
         "Bphi": "Bphi",
     }
+
+    if field_names is not None:
+        aliases = {
+            "nrho_cm-3": "n",
+            "rho_cm-3": "n",
+        }
+        requested_datasets = {
+            aliases.get(name, name)
+            for name in field_names
+        }
+        unknown = requested_datasets.difference(dataset_map)
+        if unknown:
+            raise ValueError(
+                f"Unknown field_names: {sorted(unknown)}. "
+                f"Valid names: {sorted(dataset_map)}"
+            )
+        dataset_map = {
+            dataset_name: output_name
+            for dataset_name, output_name in dataset_map.items()
+            if dataset_name in requested_datasets
+        }
 
     data: Dict[str, Any] = {
         "r": grid["r"],
@@ -375,9 +468,8 @@ def read_merged_physics(
         data["units"] = units
 
     # Backward-compatible alias. This does not duplicate the array in memory.
-    data["rho_cm-3"] = (
-        data["nrho_cm-3"]
-    )
+    if "nrho_cm-3" in data:
+        data["rho_cm-3"] = data["nrho_cm-3"]
 
     if (
         "nrho_cm-3"
@@ -406,7 +498,7 @@ def read_merged_physics(
         "Btheta",
         "Bphi",
     ):
-        if data[name].shape != expected_shape:
+        if name in data and data[name].shape != expected_shape:
             raise ValueError(
                 f"{name} has shape {data[name].shape}; "
                 f"expected {expected_shape} from grid file "

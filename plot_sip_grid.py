@@ -19,7 +19,7 @@ This version:
       are visible.
 
 Input files:
-    E:/Research/Data/SIP-IFVM/grid/
+    config.GRID_DIR
         0_00_0Gridskip1.h5
         0_00_1Gridskip1.h5
         ...
@@ -39,12 +39,13 @@ import h5py
 import numpy as np
 import pyvista as pv
 
+from config import GRID_DIR
+
 
 # ======================================================================
 # Configuration
 # ======================================================================
 
-GRID_DIR = Path(r"E:\Research\Data\SIP-IFVM\grid")
 GRID_PATTERN = "0_00_{component}Gridskip1.h5"
 
 # Choose ONE method:

@@ -58,6 +58,8 @@ import re
 import h5py
 import numpy as np
 
+from config import FULL_MERGED_DIR, FULL_TRACK_OPEN_DIR, GRID_FILE
+
 
 # ======================================================================
 # CONFIGURATION
@@ -67,17 +69,8 @@ import numpy as np
 # Input / output
 # ----------------------------------------------------------------------
 
-DATA_DIR = Path(
-    r"F:/Simulation/SIP-IFVM/merged/82d1to132/"
-)
-
-GRID_FILE = Path(
-    r"F:/Simulation/SIP-IFVM/grid/merged_spherical_grid.h5"
-)
-
-OUTPUT_DIR = Path(
-    r"F:/Simulation/SIP-IFVM/track_open/"
-)
+DATA_DIR = FULL_MERGED_DIR / "82d1to132"
+OUTPUT_DIR = FULL_TRACK_OPEN_DIR
 
 # Initial simulation time [h].
 T0_HOURS = 82.10

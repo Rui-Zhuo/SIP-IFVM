@@ -49,10 +49,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
-import re
 
 import numpy as np
 import matplotlib.pyplot as plt
+
+from config import GRID_FILE, LOCAL_MERGED_DIR, SLICE_DIR
+from read_merged_sip_data import (
+    read_merged_physics,
+    select_merged_data_files,
+    simulation_hours_from_filename,
+)
 
 
 # ======================================================================
@@ -72,26 +78,12 @@ import matplotlib.pyplot as plt
 #
 PROCESS_MODE = "all"
 
-DATA_DIR = Path(
-    r"E:/Research/Data/SIP-IFVM/merged/"
-)
-# DATA_DIR = Path(
-#     r"F:/Simulation/SIP-IFVM/merged/82d1to132/"
-# )
+DATA_DIR = LOCAL_MERGED_DIR
 
 # Used only when PROCESS_MODE = "single".
 SINGLE_DATA_FILE = "82_00_merged_spherical.h5"
 
-GRID_FILE = Path(
-    r"E:/Research/Data/SIP-IFVM/grid/merged_spherical_grid.h5"
-)
-
-SAVE_DIR = Path(
-    r"E:/Research/Work/Coronal_hole_by_SIP/slices/"
-)
-# SAVE_DIR = Path(
-#     r"F:/Simulation/SIP-IFVM/slices_vector/82d1to132/"
-# )
+OUTPUT_DIR = SLICE_DIR
 
 SAVE_OR_NOT = 1
 
@@ -185,143 +177,8 @@ MAGNETIC_FILENAME_PREFIX = "Bt_Bp"
 
 
 # ======================================================================
-# Data-file discovery
-# ======================================================================
-
-def discover_merged_data_files(
-    data_dir: Path = DATA_DIR,
-) -> list[Path]:
-    """
-    Find all merged SIP-IFVM HDF5 files in the specified folder.
-
-    Expected filename format:
-        xx_yy_merged_spherical.h5
-
-    Files are sorted numerically by simulation time.
-    """
-    data_dir = Path(data_dir)
-
-    if not data_dir.exists():
-        raise FileNotFoundError(data_dir)
-
-    pattern = re.compile(
-        r"^(\d+)_([0-9]{2})_merged_spherical\.h5$"
-    )
-
-    matched_files = []
-
-    for filename in data_dir.iterdir():
-        if not filename.is_file():
-            continue
-
-        match = pattern.match(filename.name)
-
-        if match is None:
-            continue
-
-        matched_files.append(
-            (
-                int(match.group(1)),
-                int(match.group(2)),
-                filename,
-            )
-        )
-
-    matched_files.sort(
-        key=lambda item: (
-            item[0],
-            item[1],
-        )
-    )
-
-    return [
-        item[2]
-        for item in matched_files
-    ]
-
-
-def select_data_files(
-    data_dir=DATA_DIR,
-    process_mode=PROCESS_MODE,
-    single_filename=SINGLE_DATA_FILE,
-):
-    """
-    Select files according to PROCESS_MODE.
-
-    PROCESS_MODE = "single"
-        Process DATA_DIR / SINGLE_DATA_FILE only.
-
-    PROCESS_MODE = "all"
-        Process all matching merged HDF5 files in DATA_DIR.
-    """
-    mode = str(
-        process_mode
-    ).strip().lower()
-
-    data_dir = Path(
-        data_dir
-    )
-
-    if mode == "single":
-        filename = (
-            data_dir
-            / single_filename
-        )
-
-        if not filename.exists():
-            raise FileNotFoundError(
-                filename
-            )
-
-        return [
-            filename
-        ]
-
-    if mode == "all":
-        files = discover_merged_data_files(
-            data_dir
-        )
-
-        if not files:
-            raise FileNotFoundError(
-                "No files matching "
-                "'xx_yy_merged_spherical.h5' "
-                f"were found in:\n{data_dir}"
-            )
-
-        return files
-
-    raise ValueError(
-        f"Unknown PROCESS_MODE={process_mode!r}. "
-        'Use "single" or "all".'
-    )
-
-
-# ======================================================================
 # Filename time conversion
 # ======================================================================
-
-def simulation_hours_from_filename(filename: Path) -> float:
-    """
-    Extract simulation time [hour] from a merged-data filename.
-    """
-    filename = Path(filename)
-
-    match = re.match(
-        r"^(\d+)_([0-9]{2})_merged_spherical.h5$",
-        filename.name,
-    )
-
-    if match is None:
-        raise ValueError(
-            f'Cannot parse simulation time from "{filename.name}". '
-            'Expected a filename like "82_00_merged_spherical.h5".'
-        )
-
-    hours_integer = int(match.group(1))
-    hours_fraction = int(match.group(2)) / 100.0
-
-    return hours_integer + hours_fraction
 
 
 def simulation_datetime_from_filename(
@@ -909,9 +766,7 @@ def plot_shell_vector_combined(
 
 if __name__ == "__main__":
 
-    from read_merged_sip_data import read_merged_physics
-
-    data_files = select_data_files(
+    data_files = select_merged_data_files(
         data_dir=DATA_DIR,
         process_mode=PROCESS_MODE,
         single_filename=SINGLE_DATA_FILE,
@@ -924,14 +779,14 @@ if __name__ == "__main__":
     )
 
     if SAVE_OR_NOT:
-        SAVE_DIR.mkdir(
+        OUTPUT_DIR.mkdir(
             parents=True,
             exist_ok=True,
         )
 
         if PLOT_VELOCITY_TANGENTIAL:
             (
-                SAVE_DIR
+                OUTPUT_DIR
                 / VELOCITY_FILENAME_PREFIX
             ).mkdir(
                 parents=True,
@@ -940,7 +795,7 @@ if __name__ == "__main__":
 
         if PLOT_MAGNETIC_TANGENTIAL:
             (
-                SAVE_DIR
+                OUTPUT_DIR
                 / MAGNETIC_FILENAME_PREFIX
             ).mkdir(
                 parents=True,
@@ -1030,7 +885,7 @@ if __name__ == "__main__":
             )
 
             fig.savefig(
-                SAVE_DIR
+                OUTPUT_DIR
                 / (
                     f"Bt_Bp_vt_vp_time."
                     f"{simulation_hours:.2f}."

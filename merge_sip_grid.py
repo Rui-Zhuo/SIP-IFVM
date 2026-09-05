@@ -20,13 +20,13 @@ Requirements:
     h5py
 
 Default input:
-    E:/Research/Data/SIP-IFVM/grid/
+    config.GRID_DIR
         0_00_0Gridskip1.h5
         ...
         0_00_5Gridskip1.h5
 
 Default output:
-    E:/Research/Data/SIP-IFVM/grid/merged_spherical_grid.h5
+    config.GRID_FILE
 """
 
 from __future__ import annotations
@@ -39,12 +39,13 @@ import h5py
 import numpy as np
 from scipy.spatial import cKDTree
 
+from config import GRID_DIR
+
 
 # ----------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------
 
-GRID_DIR = Path(r"E:/Research/Data/SIP-IFVM/grid")
 GRID_PATTERN = "0_00_{component}Gridskip1.h5"
 OUTPUT_FILE = GRID_DIR / "merged_spherical_grid.h5"
 

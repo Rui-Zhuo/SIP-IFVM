@@ -42,12 +42,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
-import re
 
 import numpy as np
 import pyvista as pv
 
-from read_merged_sip_data import read_merged_physics
+from config import FIELDLINE_DIR, GRID_FILE, LOCAL_MERGED_DIR
+from read_merged_sip_data import (
+    read_merged_physics,
+    select_merged_data_files,
+    simulation_hours_from_filename,
+)
 
 # ======================================================================
 # CONFIGURATION
@@ -66,20 +70,12 @@ from read_merged_sip_data import read_merged_physics
 #
 PROCESS_MODE = "single"
 
-DATA_DIR = Path(
-    r"E:/Research/Data/SIP-IFVM/merged/"
-)
+DATA_DIR = LOCAL_MERGED_DIR
 
 # Used only when PROCESS_MODE = "single".
 SINGLE_DATA_FILE = "84_00_merged_spherical.h5"
 
-GRID_FILE = Path(
-    r"E:/Research/Data/SIP-IFVM/grid/merged_spherical_grid.h5"
-)
-
-OUTPUT_DIR = Path(
-    r"E:/Research/Work/Coronal_hole_by_SIP/fieldlines/"
-)
+OUTPUT_DIR = FIELDLINE_DIR
 
 SAVE_HTML = 1
 SAVE_SCREENSHOT = 0
@@ -303,135 +299,8 @@ SHOW_GRID_BOUNDS = False
 
 
 # ======================================================================
-# Data-file discovery
-# ======================================================================
-
-def discover_merged_data_files(
-    data_dir: Path = DATA_DIR,
-) -> list[Path]:
-    """
-    Find all merged SIP-IFVM HDF5 files in the specified folder.
-
-    Expected filename format:
-        xx_yy_merged_spherical.h5
-    """
-    data_dir = Path(data_dir)
-
-    if not data_dir.exists():
-        raise FileNotFoundError(data_dir)
-
-    pattern = re.compile(
-        r"^(\d+)_([0-9]{2})_merged_spherical\.h5$"
-    )
-
-    matched_files = []
-
-    for filename in data_dir.iterdir():
-        if not filename.is_file():
-            continue
-
-        match = pattern.match(filename.name)
-
-        if match is None:
-            continue
-
-        matched_files.append(
-            (
-                int(match.group(1)),
-                int(match.group(2)),
-                filename,
-            )
-        )
-
-    matched_files.sort(
-        key=lambda item: (
-            item[0],
-            item[1],
-        )
-    )
-
-    return [
-        item[2]
-        for item in matched_files
-    ]
-
-
-def select_data_files(
-    data_dir=DATA_DIR,
-    process_mode=PROCESS_MODE,
-    single_filename=SINGLE_DATA_FILE,
-):
-    """
-    Select files according to PROCESS_MODE.
-    """
-    mode = str(
-        process_mode
-    ).strip().lower()
-
-    data_dir = Path(
-        data_dir
-    )
-
-    if mode == "single":
-        filename = (
-            data_dir
-            / single_filename
-        )
-
-        if not filename.exists():
-            raise FileNotFoundError(
-                filename
-            )
-
-        return [
-            filename
-        ]
-
-    if mode == "all":
-        files = discover_merged_data_files(
-            data_dir
-        )
-
-        if not files:
-            raise FileNotFoundError(
-                "No files matching "
-                "'xx_yy_merged_spherical.h5' "
-                f"were found in:\n{data_dir}"
-            )
-
-        return files
-
-    raise ValueError(
-        f"Unknown PROCESS_MODE={process_mode!r}. "
-        'Use "single" or "all".'
-    )
-
-
-# ======================================================================
 # Filename time conversion
 # ======================================================================
-
-def simulation_hours_from_filename(filename: Path) -> float:
-    """
-    Extract simulation time [hour] from a merged-data filename.
-    """
-    filename = Path(filename)
-
-    match = re.match(
-        r"^(\d+)_([0-9]{2})_merged_spherical.h5$",
-        filename.name,
-    )
-
-    if match is None:
-        raise ValueError(
-            f'Cannot parse simulation time from "{filename.name}". '
-            'Expected a filename like "82_00_merged_spherical.h5".'
-        )
-
-    hours_integer = int(match.group(1))
-    hours_fraction = int(match.group(2)) / 100.0
-
-    return hours_integer + hours_fraction
 
 
 def simulation_datetime_from_filename(
@@ -2702,7 +2571,7 @@ def plot_magnetic_configuration(
 
 def main():
 
-    data_files = select_data_files(
+    data_files = select_merged_data_files(
         data_dir=DATA_DIR,
         process_mode=PROCESS_MODE,
         single_filename=SINGLE_DATA_FILE,

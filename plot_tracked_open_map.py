@@ -24,21 +24,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 
+from config import OPEN_CLOSED_DIR, TRACK_OPEN_DIR, WORK_ROOT
+
 
 # ======================================================================
 # CONFIGURATION
 # ======================================================================
 
-WORK_DIR = Path(
-    r"E:/Research/Work/Coronal_hole_by_SIP/"
-)
-
-TRACK_DIR = WORK_DIR / "track_open/"
-
-
-OPEN_CLOSED_DIR = Path(
-    r"E:/Research/Work/Coronal_hole_by_SIP/open_closed/"
-)
+WORK_DIR = WORK_ROOT
+TRACK_DIR = TRACK_OPEN_DIR
 
 ID_FILE = (
     WORK_DIR

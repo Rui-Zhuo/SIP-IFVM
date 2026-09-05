@@ -34,32 +34,21 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime, timedelta
-import re
 
-import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from scipy.ndimage import gaussian_filter, convolve
 
+from config import FULL_MERGED_DIR, FULL_OPEN_CLOSED_DIR, GRID_FILE
+from read_merged_sip_data import (
+    read_merged_grid,
+    read_merged_physics,
+    select_merged_data_files,
+    simulation_hours_from_filename,
+)
 
-SIMULATION_START_DATETIME = datetime(2026, 4, 8, 16, 0)
-
-def simulation_hours_from_filename(filename: Path) -> float:
-    filename = Path(filename)
-    match = re.match(r"^(\d+)_([0-9]{2})_merged_spherical\.h5$", filename.name)
-    if match is None:
-        raise ValueError(f'Cannot parse simulation time from "{filename.name}".')
-    return int(match.group(1)) + int(match.group(2)) / 100.0
-
-def simulation_datetime_from_filename(filename: Path, start_datetime: datetime = SIMULATION_START_DATETIME) -> datetime:
-    return start_datetime + timedelta(hours=simulation_hours_from_filename(filename))
-
-def format_simulation_datetime(filename: Path) -> str:
-    h = simulation_hours_from_filename(filename)
-    dt = simulation_datetime_from_filename(filename)
-    return f"{dt:%Y-%m-%d %H:%M} ({h:.2f}h)"
 
 # ======================================================================
 # CONFIGURATION
@@ -78,26 +67,12 @@ def format_simulation_datetime(filename: Path) -> str:
 #
 PROCESS_MODE = "all"
 
-# DATA_DIR = Path(
-#     r"E:/Research/Data/SIP-IFVM/merged"
-# )
-DATA_DIR = Path(
-    r"F:/Simulation/SIP-IFVM/merged/82d1to132/"
-)
+DATA_DIR = FULL_MERGED_DIR / "82d1to132"
 
 # Used only when PROCESS_MODE = "single".
 SINGLE_DATA_FILE = "82_00_merged_spherical.h5"
 
-GRID_FILE = Path(
-    r"E:/Research/Data/SIP-IFVM/grid/merged_spherical_grid.h5"
-)
-
-# OUTPUT_DIR = Path(
-#     r"E:/Research/Work/Coronal_hole_by_SIP/open_closed/"
-# )
-OUTPUT_DIR = Path(
-    r"F:/Simulation/SIP-IFVM/open_closed/82d1to132/"
-)
+OUTPUT_DIR = FULL_OPEN_CLOSED_DIR / "82d1to132"
 
 # ----------------------------------------------------------------------
 # Simulation time reference
@@ -106,6 +81,20 @@ OUTPUT_DIR = Path(
 SIMULATION_START_DATETIME = datetime(
     2026, 4, 8, 16, 0
 )
+
+
+def simulation_datetime_from_filename(filename: Path) -> datetime:
+    """Convert filename simulation time to calendar time."""
+    return SIMULATION_START_DATETIME + timedelta(
+        hours=simulation_hours_from_filename(filename)
+    )
+
+
+def format_simulation_datetime(filename: Path) -> str:
+    """Return the standard datetime label used in figures."""
+    hours = simulation_hours_from_filename(filename)
+    simulation_datetime = simulation_datetime_from_filename(filename)
+    return f"{simulation_datetime:%Y-%m-%d %H:%M} ({hours:.2f}h)"
 
 # ----------------------------------------------------------------------
 # Field-line geometry
@@ -177,202 +166,6 @@ FIGSIZE = (10, 8)
 COLORBAR_SHRINK = 0.80
 SUPTITLE_FONTSIZE = 13
 DPI = 250
-
-
-# ======================================================================
-# DATA-FILE DISCOVERY
-# ======================================================================
-
-def discover_data_files(
-    data_dir=DATA_DIR,
-):
-    """
-    Find all merged HDF5 files in DATA_DIR.
-
-    Expected filename pattern:
-        xx_yy_merged_spherical.h5
-    """
-    data_dir = Path(
-        data_dir
-    )
-
-    if not data_dir.exists():
-        raise FileNotFoundError(
-            data_dir
-        )
-
-    pattern = re.compile(
-        r"^(\d+)_([0-9]{2})_merged_spherical\.h5$"
-    )
-
-    matched = []
-
-    for filename in data_dir.iterdir():
-
-        if not filename.is_file():
-            continue
-
-        match = pattern.match(
-            filename.name
-        )
-
-        if match is None:
-            continue
-
-        matched.append(
-            (
-                int(match.group(1)),
-                int(match.group(2)),
-                filename,
-            )
-        )
-
-    matched.sort(
-        key=lambda item: (
-            item[0],
-            item[1],
-        )
-    )
-
-    return [
-        item[2]
-        for item in matched
-    ]
-
-
-def select_data_files(
-    data_dir=DATA_DIR,
-    process_mode=PROCESS_MODE,
-    single_filename=SINGLE_DATA_FILE,
-):
-    """
-    Select files according to PROCESS_MODE.
-
-    "single":
-        Process DATA_DIR / SINGLE_DATA_FILE.
-
-    "all":
-        Process all matching merged HDF5 files in DATA_DIR.
-    """
-    mode = str(
-        process_mode
-    ).strip().lower()
-
-    data_dir = Path(
-        data_dir
-    )
-
-    if mode == "single":
-        filename = (
-            data_dir
-            / single_filename
-        )
-
-        if not filename.exists():
-            raise FileNotFoundError(
-                filename
-            )
-
-        return [
-            filename
-        ]
-
-    if mode == "all":
-        files = discover_data_files(
-            data_dir
-        )
-
-        if not files:
-            raise FileNotFoundError(
-                "No files matching "
-                "'xx_yy_merged_spherical.h5' "
-                f"were found in:\n{data_dir}"
-            )
-
-        return files
-
-    raise ValueError(
-        f"Unknown PROCESS_MODE={process_mode!r}. "
-        'Use "single" or "all".'
-    )
-
-
-# ======================================================================
-# READ DATA
-# ======================================================================
-
-def read_grid(
-    filename=GRID_FILE,
-):
-    if not filename.exists():
-        raise FileNotFoundError(
-            filename
-        )
-
-    with h5py.File(
-        filename,
-        "r",
-    ) as f:
-
-        for name in (
-            "r",
-            "theta",
-            "phi",
-        ):
-            if name not in f:
-                raise KeyError(
-                    f'Missing dataset "{name}" in {filename}'
-                )
-
-        r = np.asarray(
-            f["r"][...],
-            dtype=float,
-        )
-
-        theta = np.asarray(
-            f["theta"][...],
-            dtype=float,
-        )
-
-        phi = np.asarray(
-            f["phi"][...],
-            dtype=float,
-        )
-
-    return r, theta, phi
-
-
-def read_magnetic_field(
-    filename,
-):
-    if not filename.exists():
-        raise FileNotFoundError(
-            filename
-        )
-
-    out = {}
-
-    with h5py.File(
-        filename,
-        "r",
-    ) as f:
-
-        for name in (
-            "Br",
-            "Btheta",
-            "Bphi",
-        ):
-            if name not in f:
-                raise KeyError(
-                    f'Missing dataset "{name}" in {filename}'
-                )
-
-            out[name] = np.asarray(
-                f[name][...],
-                dtype=float,
-            )
-
-    return out
 
 
 # ======================================================================
@@ -2315,11 +2108,16 @@ def main():
         exist_ok=True,
     )
 
-    r, theta, phi = read_grid(
-        GRID_FILE
+    grid = read_merged_grid(
+        filename=GRID_FILE,
+        load_cartesian=False,
+        load_selection_maps=False,
     )
+    r = np.asarray(grid["r"], dtype=float)
+    theta = np.asarray(grid["theta"], dtype=float)
+    phi = np.asarray(grid["phi"], dtype=float)
 
-    data_files = select_data_files(
+    data_files = select_merged_data_files(
         data_dir=DATA_DIR,
         process_mode=PROCESS_MODE,
         single_filename=SINGLE_DATA_FILE,
@@ -2349,8 +2147,11 @@ def main():
             "=" * 72
         )
 
-        fields = read_magnetic_field(
-            data_file
+        fields = read_merged_physics(
+            filename=data_file,
+            grid_filename=GRID_FILE,
+            load_component_map=False,
+            field_names=("Br", "Btheta", "Bphi"),
         )
 
         Br = fields["Br"]
@@ -2363,7 +2164,8 @@ def main():
             len(phi),
         )
 
-        for name, array in fields.items():
+        for name in ("Br", "Btheta", "Bphi"):
+            array = fields[name]
             if array.shape != expected_shape:
                 raise ValueError(
                     f"{name}.shape={array.shape}, "
@@ -2429,10 +2231,6 @@ def main():
                 "  saved open-field correspondences:"
                 f" {len(result['open_label']):,}"
             )
-
-        simulation_hours = simulation_hours_from_filename(
-            data_file
-        )
 
         simulation_hours = simulation_hours_from_filename(
             data_file

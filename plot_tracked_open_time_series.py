@@ -45,6 +45,8 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 
+from config import OPEN_CLOSED_DIR, TRACK_OPEN_DIR, WORK_ROOT
+
 
 # ======================================================================
 # CONFIGURATION
@@ -54,11 +56,8 @@ import matplotlib.pyplot as plt
 # Tracking files
 # ----------------------------------------------------------------------
 
-WORK_DIR = Path(
-    r"E:/Research/Work/Coronal_hole_by_SIP/"
-)
-
-TRACK_DIR = WORK_DIR / "track_open/"
+WORK_DIR = WORK_ROOT
+TRACK_DIR = TRACK_OPEN_DIR
 
 R0 = 10.0
 
@@ -66,10 +65,7 @@ R0 = 10.0
 # Open / closed reference map used to select IDs
 # ----------------------------------------------------------------------
 
-OPEN_CLOSED_FILE = Path(
-    r"E:/Research/Work/Coronal_hole_by_SIP/open_closed/"
-    r"open_closed_time.82.10.npz"
-)
+OPEN_CLOSED_FILE = OPEN_CLOSED_DIR / "open_closed_time.82.10.npz"
 
 # Prefix/tag inside the NPZ.
 # Example keys:
