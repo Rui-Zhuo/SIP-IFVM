@@ -14,12 +14,14 @@ The script follows the data convention used by plot_merged_slices.py:
     data["Bphi"]    : (Nr, Ntheta, Nphi)
 
 Main plot:
-    1. Draw the inner spherical shell and color it with Br.
+    1. Draw the inner spherical shell with the precomputed open/closed map
+       and overlay the smoothed Br=0 contour.
     2. Select magnetic-field-line seed points on an independently chosen radial shell.
     3. Build a 3-D PyVista StructuredGrid from the merged spherical grid.
     4. Convert (Br, Btheta, Bphi) -> global Cartesian B = (Bx, By, Bz),
        then trace magnetic field lines.
-    5. Plot the Br-colored solar surface, transparent seed shell, and classified magnetic field lines.
+    5. Plot the topology-colored solar surface, transparent seed shell, and
+       classified magnetic field lines.
 
 Important:
     This version reads Br, Btheta, Bphi and converts them to GLOBAL
@@ -27,8 +29,9 @@ Important:
     tracing.
 
 Requirements:
-    numpy
-    pyvista
+    matplotlib==3.10.8
+    numpy==1.26.4
+    pyvista==0.46.3
 
 The script assumes that read_merged_data.py is available in the same
 environment and provides:
@@ -41,12 +44,19 @@ Author-facing configuration is in the CONFIGURATION section below.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from html import escape
 from pathlib import Path
 
 import numpy as np
 import pyvista as pv
+from matplotlib.colors import ListedColormap
 
-from config import FIELDLINE_DIR, GRID_FILE, LOCAL_MERGED_DIR
+from config import (
+    FIELDLINE_DIR,
+    GRID_FILE,
+    LOCAL_MERGED_DIR,
+    OPEN_CLOSED_DIR,
+)
 from read_merged_sip_data import (
     read_merged_physics,
     select_merged_data_files,
@@ -102,13 +112,25 @@ SIMULATION_START_DATETIME = datetime(
 )
 
 # ----------------------------------------------------------------------
-# Solar-surface shell
+# Solar-surface topology shell
 # ----------------------------------------------------------------------
 SURFACE_RADIAL_INDEX = 0
 
-BR_CMAP = "seismic"
-BR_CLIM = (-3, 3)
-BR_CLIM_PERCENTILE = 99.5
+OPEN_CLOSED_DATA_DIR = OPEN_CLOSED_DIR
+OPEN_CLOSED_FILENAME_FORMAT = "open_closed_time.{simulation_hours:.2f}.npz"
+OPEN_CLOSED_MAP_TAG = "rindex0"
+
+OPEN_CLOSED_CMAP = ListedColormap(
+    [
+        "royalblue",
+        "lightgray",
+        "firebrick",
+    ]
+)
+OPEN_CLOSED_CLIM = (-1.5, 1.5)
+BR_ZERO_CONTOUR_COLOR = "black"
+BR_ZERO_CONTOUR_LINE_WIDTH = 2.5
+BR_ZERO_CONTOUR_RADIUS_FACTOR = 1.002
 
 SURFACE_OPACITY = 1.0
 SHOW_SURFACE_EDGES = False
@@ -478,35 +500,6 @@ def wrap_phi_axis(phi, *arrays):
     return phi_wrap, wrapped
 
 
-def choose_br_clim(br_surface):
-    """
-    Return a symmetric Br color range.
-    """
-    if BR_CLIM is not None:
-        return BR_CLIM
-
-    finite = np.asarray(br_surface)
-    finite = finite[np.isfinite(finite)]
-
-    if finite.size == 0:
-        raise ValueError("No finite Br values on solar surface.")
-
-    abs_lim = float(
-        np.percentile(
-            np.abs(finite),
-            BR_CLIM_PERCENTILE,
-        )
-    )
-
-    if abs_lim <= 0.0:
-        abs_lim = float(np.max(np.abs(finite)))
-
-    if abs_lim <= 0.0:
-        abs_lim = 1.0
-
-    return (-abs_lim, abs_lim)
-
-
 # ======================================================================
 # PyVista grid construction
 # ======================================================================
@@ -598,15 +591,94 @@ def build_magnetic_structured_grid(data):
     }
 
 
-def build_br_surface(data):
+def load_open_closed_surface_data(data, simulation_hours):
+    """Load and validate the precomputed inner-boundary topology map."""
+    filename = OPEN_CLOSED_DATA_DIR / OPEN_CLOSED_FILENAME_FORMAT.format(
+        simulation_hours=simulation_hours,
+    )
+
+    if not filename.is_file():
+        raise FileNotFoundError(
+            "Precomputed open/closed result not found: "
+            f"{filename}"
+        )
+
+    map_key = f"{OPEN_CLOSED_MAP_TAG}_open_closed_map"
+
+    with np.load(filename) as result:
+        required = {
+            "theta",
+            "phi",
+            "Br_inner_contour_smooth",
+            "inner_radius",
+            map_key,
+        }
+        missing = sorted(required.difference(result.files))
+
+        if missing:
+            raise KeyError(
+                f"Missing arrays in {filename}: {missing}"
+            )
+
+        theta_map = np.asarray(result["theta"], dtype=float)
+        phi_map = np.asarray(result["phi"], dtype=float)
+        open_closed_map = np.asarray(result[map_key], dtype=np.int8)
+        br_contour = np.asarray(
+            result["Br_inner_contour_smooth"],
+            dtype=float,
+        )
+        inner_radius = float(result["inner_radius"])
+
+    theta = np.asarray(data["theta"], dtype=float)
+    phi = np.asarray(data["phi"], dtype=float)
+    radius = float(np.asarray(data["r"], dtype=float)[SURFACE_RADIAL_INDEX])
+    expected_shape = (theta.size, phi.size)
+
+    if open_closed_map.shape != expected_shape:
+        raise ValueError(
+            f"{map_key}.shape={open_closed_map.shape}, "
+            f"expected {expected_shape}."
+        )
+
+    if br_contour.shape != expected_shape:
+        raise ValueError(
+            f"Br_inner_contour_smooth.shape={br_contour.shape}, "
+            f"expected {expected_shape}."
+        )
+
+    if not np.allclose(theta_map, theta) or not np.allclose(phi_map, phi):
+        raise ValueError(
+            "The open/closed map angular grid does not match the magnetic data."
+        )
+
+    if not np.isclose(inner_radius, radius):
+        raise ValueError(
+            f"The open/closed map radius ({inner_radius}) does not match "
+            f"the displayed surface radius ({radius})."
+        )
+
+    if not np.all(np.isfinite(open_closed_map)):
+        raise ValueError("The open/closed map contains NaN or Inf values.")
+
+    if not set(np.unique(open_closed_map)).issubset({-1, 0, 1}):
+        raise ValueError(
+            "The open/closed map contains labels other than -1, 0, and +1."
+        )
+
+    if not np.all(np.isfinite(br_contour)):
+        raise ValueError("The smoothed Br surface contains NaN or Inf values.")
+
+    return filename, open_closed_map, br_contour
+
+
+def build_open_closed_surface(data, open_closed_map, br_contour):
     """
     Build the inner spherical surface as a PyVista StructuredGrid
-    and attach Br as point scalars.
+    and attach the open/closed labels and smoothed Br contour values.
     """
     r = np.asarray(data["r"], dtype=float)
     theta = np.asarray(data["theta"], dtype=float)
     phi = np.asarray(data["phi"], dtype=float)
-    br = np.asarray(data["Br"], dtype=float)
 
     idx = SURFACE_RADIAL_INDEX
 
@@ -620,11 +692,10 @@ def build_br_surface(data):
         )
 
     radius = float(r[idx])
-    br_surface = br[idx, :, :]
-
-    phi_wrap, (br_wrap,) = wrap_phi_axis(
+    phi_wrap, (map_wrap, br_contour_wrap) = wrap_phi_axis(
         phi,
-        br_surface,
+        open_closed_map,
+        br_contour,
     )
 
     tt, pp = np.meshgrid(
@@ -647,9 +718,18 @@ def build_br_surface(data):
         z,
     )
 
-    surface.point_data["Br"] = br_wrap.ravel(order="F")
+    surface.point_data["OpenClosed"] = map_wrap.ravel(order="F")
+    surface.point_data["BrContour"] = br_contour_wrap.ravel(order="F")
 
-    return surface, radius, br_surface
+    br_zero_contour = surface.contour(
+        isosurfaces=[0.0],
+        scalars="BrContour",
+    )
+
+    if br_zero_contour.n_points > 0:
+        br_zero_contour.points *= BR_ZERO_CONTOUR_RADIUS_FACTOR
+
+    return surface, br_zero_contour, radius
 
 
 
@@ -2379,10 +2459,119 @@ def _add_fieldline_group(
     )
 
 
+def add_exported_html_overlays(
+    output_html_file,
+    title_lines,
+):
+    """Add HTML-native title and categorical colorbar overlays."""
+    output_html_file = Path(output_html_file)
+    html_text = output_html_file.read_text(encoding="utf-8")
+
+    title_html = "<br>".join(
+        escape(str(line))
+        for line in title_lines
+    )
+
+    browser_title = escape(
+        f"SIP-IFVM magnetic field - {title_lines[1]}"
+    )
+
+    style = """
+    <style id="sip-fieldline-overlays-style">
+      .sip-scene-title {
+        position: fixed;
+        top: 18px;
+        left: 22px;
+        z-index: 1000;
+        color: #111;
+        font-family: Arial, sans-serif;
+        font-size: 18px;
+        line-height: 1.35;
+        pointer-events: none;
+        text-shadow: 0 0 3px white, 0 0 3px white;
+      }
+      .sip-topology-colorbar {
+        position: fixed;
+        top: 50%;
+        right: 28px;
+        z-index: 1000;
+        transform: translateY(-50%);
+        color: #111;
+        font-family: Arial, sans-serif;
+        font-size: 15px;
+        pointer-events: none;
+      }
+      .sip-colorbar-title {
+        margin-bottom: 8px;
+        text-align: center;
+        font-size: 16px;
+      }
+      .sip-colorbar-body {
+        display: flex;
+        align-items: stretch;
+      }
+      .sip-colorbar-swatches {
+        width: 34px;
+        height: 240px;
+        border: 1px solid #444;
+        box-sizing: border-box;
+      }
+      .sip-colorbar-swatch {
+        height: 33.333333%;
+      }
+      .sip-colorbar-labels {
+        display: flex;
+        height: 240px;
+        flex-direction: column;
+        justify-content: space-around;
+        margin-left: 9px;
+      }
+      .sip-colorbar-label {
+        white-space: nowrap;
+      }
+    </style>
+    """
+
+    overlay = f"""
+    <div class="sip-scene-title">{title_html}</div>
+    <div class="sip-topology-colorbar">
+      <div class="sip-colorbar-title">Open / closed</div>
+      <div class="sip-colorbar-body">
+        <div class="sip-colorbar-swatches">
+          <div class="sip-colorbar-swatch" style="background:#b22222"></div>
+          <div class="sip-colorbar-swatch" style="background:#d3d3d3"></div>
+          <div class="sip-colorbar-swatch" style="background:#4169e1"></div>
+        </div>
+        <div class="sip-colorbar-labels">
+          <div class="sip-colorbar-label">Open (+)</div>
+          <div class="sip-colorbar-label">Closed</div>
+          <div class="sip-colorbar-label">Open (-)</div>
+        </div>
+      </div>
+    </div>
+    """
+
+    html_text = html_text.replace(
+        "</head>",
+        f"<title>{browser_title}</title>\n{style}\n</head>",
+        1,
+    )
+    html_text = html_text.replace(
+        "</body>",
+        f"{overlay}\n</body>",
+        1,
+    )
+
+    output_html_file.write_text(
+        html_text,
+        encoding="utf-8",
+    )
+
+
 def plot_magnetic_configuration(
     surface,
+    br_zero_contour,
     seed_shell,
-    br_clim,
     seed_source,
     field_line_groups,
     surface_radius,
@@ -2393,7 +2582,7 @@ def plot_magnetic_configuration(
 ):
     """
     Plot:
-        - r_index=0 Br sphere
+        - r_index=0 open/closed sphere with the smoothed Br=0 contour
         - transparent yellow seed shell
         - open field lines with seed-point Br>0 in red
         - open field lines with seed-point Br<0 in blue
@@ -2414,22 +2603,38 @@ def plot_magnetic_configuration(
     )
 
     # --------------------------------------------------------------
-    # Solar surface: always r_index=0 with Br
+    # Solar surface: open/closed topology on r_index=0
     # --------------------------------------------------------------
     plotter.add_mesh(
         surface,
-        scalars="Br",
-        cmap=BR_CMAP,
-        clim=br_clim,
+        scalars="OpenClosed",
+        cmap=OPEN_CLOSED_CMAP,
+        clim=OPEN_CLOSED_CLIM,
+        n_colors=3,
+        annotations={
+            -1.0: "Open (-)",
+            0.0: "Closed",
+            1.0: "Open (+)",
+        },
         opacity=SURFACE_OPACITY,
         show_edges=SHOW_SURFACE_EDGES,
         smooth_shading=False,
         scalar_bar_args={
-            "title": "Br",
+            "title": "Open / closed",
             "vertical": True,
+            "n_labels": 0,
         },
-        name="solar_surface_Br",
+        name="solar_surface_open_closed",
     )
+
+    if br_zero_contour.n_points > 0:
+        plotter.add_mesh(
+            br_zero_contour,
+            color=BR_ZERO_CONTOUR_COLOR,
+            line_width=BR_ZERO_CONTOUR_LINE_WIDTH,
+            render_lines_as_tubes=True,
+            name="solar_surface_Br_zero_contour",
+        )
 
     # --------------------------------------------------------------
     # Seed shell: transparent yellow reference sphere
@@ -2500,11 +2705,15 @@ def plot_magnetic_configuration(
             all_edges=True,
         )
 
-    plotter.add_text(
-        "SIP-IFVM magnetic field\n"
-        f"{datetime_label}\n"
-        f"sphere shell: r = {surface_radius:.6g} Rs\n"
+    title_lines = [
+        "SIP-IFVM magnetic field",
+        datetime_label,
+        f"sphere shell: r = {surface_radius:.6g} Rs",
         f"seed shell: r = {seed_shell_radius:.6g} Rs",
+    ]
+
+    plotter.add_text(
+        "\n".join(title_lines),
         position="upper_left",
         font_size=12,
     )
@@ -2536,8 +2745,24 @@ def plot_magnetic_configuration(
             parents=True,
             exist_ok=True,
         )
-        plotter.export_html(
-            output_html_file
+        scalar_bar_actor = dict(
+            plotter.scalar_bars.items()
+        ).get("Open / closed")
+
+        if scalar_bar_actor is not None:
+            scalar_bar_actor.SetVisibility(False)
+
+        try:
+            plotter.export_html(
+                output_html_file
+            )
+        finally:
+            if scalar_bar_actor is not None:
+                scalar_bar_actor.SetVisibility(True)
+
+        add_exported_html_overlays(
+            output_html_file,
+            title_lines,
         )
         print(
             f"Saved HTML:\n  {output_html_file}"
@@ -2688,19 +2913,32 @@ def main():
             f"\n  r_max   = {r.max():.8g}"
         )
 
-        surface, surface_radius, br_surface = build_br_surface(
+        (
+            open_closed_file,
+            open_closed_map,
+            br_contour,
+        ) = load_open_closed_surface_data(
             data,
+            simulation_hours,
         )
 
-        br_clim = choose_br_clim(
-            br_surface,
+        (
+            surface,
+            br_zero_contour,
+            surface_radius,
+        ) = build_open_closed_surface(
+            data,
+            open_closed_map,
+            br_contour,
         )
 
         print(
-            "\nDisplayed Br surface:"
+            "\nDisplayed open/closed surface:"
             f"\n  radial index = {SURFACE_RADIAL_INDEX}"
             f"\n  radius       = {surface_radius:.8g}"
-            f"\n  Br clim      = ({br_clim[0]:.6e}, {br_clim[1]:.6e})"
+            f"\n  source       = {open_closed_file}"
+            f"\n  map tag      = {OPEN_CLOSED_MAP_TAG}"
+            f"\n  Br=0 points  = {br_zero_contour.n_points}"
         )
 
         seed_radial_index, seed_radius, seed_radial_mode = resolve_seed_shell(
@@ -2767,8 +3005,8 @@ def main():
 
         plot_magnetic_configuration(
             surface,
+            br_zero_contour,
             seed_shell,
-            br_clim,
             seed_source,
             field_line_groups,
             surface_radius,
