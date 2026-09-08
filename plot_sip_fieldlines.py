@@ -233,6 +233,10 @@ LINE_ENDPOINT_1 = (-3.0, 40.0) # 84.00 h
 LINE_ENDPOINT_2 = (23.0, 47.0) # 84.00 h
 LINE_N_SEEDS = 15
 
+# Besides the original line points, also add copies whose longitudes are
+# shifted by these offsets [deg].
+LINE_LONGITUDE_OFFSETS_DEG = [1.0, -1.0]
+
 # ----------------------------------------------------------------------
 # neighbor_rings mode
 # ----------------------------------------------------------------------
@@ -1374,7 +1378,17 @@ def select_line_between_points_seeds(data):
         (latitude_deg, longitude_deg)
 
     LINE_N_SEEDS:
-        total number of points, including both endpoints.
+        total number of points on the central line, including both
+        endpoints.
+
+    In addition to those central-line points, this mode also adds
+    copies whose longitudes are shifted by the values in
+    LINE_LONGITUDE_OFFSETS_DEG.
+
+    Example:
+        central line
+        + all points shifted by +0.5 deg in longitude
+        + all points shifted by -0.5 deg in longitude
     """
     idx, seed_radius, _ = get_seed_shell(
         data
@@ -1398,6 +1412,11 @@ def select_line_between_points_seeds(data):
             "Endpoint latitude must be within [-90, 90] deg."
         )
 
+    offsets_deg = [
+        float(value)
+        for value in LINE_LONGITUDE_OFFSETS_DEG
+    ]
+
     # Shortest periodic longitude difference.
     dlon = (
         (lon2 - lon1 + 180.0)
@@ -1416,38 +1435,61 @@ def select_line_between_points_seeds(data):
         + fraction * (lat2 - lat1)
     )
 
-    longitudes = (
+    longitudes_center = (
         lon1
         + fraction * dlon
     ) % 360.0
 
-    seeds = [
-        latlon_to_cartesian(
-            seed_radius,
-            lat,
-            lon,
+    seeds = []
+
+    # 1) Original central line.
+    for lat, lon in zip(
+        latitudes,
+        longitudes_center,
+    ):
+        seeds.append(
+            latlon_to_cartesian(
+                seed_radius,
+                lat,
+                lon,
+            )
         )
+
+    # 2) Longitude-shifted copies.
+    for dlon_offset in offsets_deg:
+        longitudes_shifted = (
+            longitudes_center
+            + dlon_offset
+        ) % 360.0
+
         for lat, lon in zip(
             latitudes,
-            longitudes,
-        )
-    ]
+            longitudes_shifted,
+        ):
+            seeds.append(
+                latlon_to_cartesian(
+                    seed_radius,
+                    lat,
+                    lon,
+                )
+            )
 
     print(
         "\nLine-between-points seeds:"
-        f"\n  r_index    = {idx}"
-        f"\n  radius     = {seed_radius:.8g}"
-        f"\n  endpoint 1 = ({lat1:.4f}, {lon1 % 360.0:.4f}) deg"
-        f"\n  endpoint 2 = ({lat2:.4f}, {lon2 % 360.0:.4f}) deg"
-        f"\n  N          = {len(seeds)}"
+        f"\n  r_index              = {idx}"
+        f"\n  radius               = {seed_radius:.8g}"
+        f"\n  endpoint 1           = ({lat1:.4f}, {lon1 % 360.0:.4f}) deg"
+        f"\n  endpoint 2           = ({lat2:.4f}, {lon2 % 360.0:.4f}) deg"
+        f"\n  central-line N       = {LINE_N_SEEDS}"
+        f"\n  longitude offsets    = {offsets_deg} deg"
+        f"\n  copies per offset    = {LINE_N_SEEDS}"
+        f"\n  total N              = {len(seeds)}"
     )
 
     return np.asarray(
         seeds,
         dtype=float,
     )
-
-
 def select_neighbor_ring_seeds(data):
     """
     Select seeds on one or more circles around NEIGHBOR_CENTER in the

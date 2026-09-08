@@ -27,8 +27,12 @@ Main tasks
        - plot latitude vs time
        - legend displays ID only
 
-7. Save the selected global IDs and their initial r_index=0 longitude/latitude to:
+7. Save the selected global IDs and their initial r_index=0 and R0
+   longitude/latitude to:
        tracked_open_field_id.npz
+
+8. Save separate longitude/latitude time-series figures for the r_index=0
+   and R0 footpoints.
 
 Longitude time series can optionally remove the empirical
 latitude-dependent differential-rotation drift.
@@ -170,6 +174,11 @@ TIME_SERIES_OUTPUT_FILE = (
     / f"tracked_open_footpoints.r0.{R0:g}.png"
 )
 
+R0_TIME_SERIES_OUTPUT_FILE = (
+    WORK_DIR
+    / f"tracked_open_r0_footpoints.r0.{R0:g}.png"
+)
+
 ID_OUTPUT_FILE = (
     WORK_DIR
     / "tracked_open_field_id.npz"
@@ -259,6 +268,8 @@ def load_track_npz(
 ):
     required = (
         "id",
+        "r0_theta",
+        "r0_phi",
         "inner_theta",
         "inner_phi",
     )
@@ -1091,6 +1102,7 @@ def save_selected_ids(
     filename,
     selected_ids,
     match_info,
+    initial_track,
     reference_time_hours,
 ):
     filename = Path(filename)
@@ -1099,6 +1111,41 @@ def save_selected_ids(
         parents=True,
         exist_ok=True,
     )
+
+    id_to_index = build_id_to_index(
+        initial_track["id"]
+    )
+
+    r0_longitude_deg = np.full(
+        len(selected_ids),
+        np.nan,
+        dtype=float,
+    )
+
+    r0_latitude_deg = np.full(
+        len(selected_ids),
+        np.nan,
+        dtype=float,
+    )
+
+    for iid, seed_id in enumerate(selected_ids):
+        index = id_to_index.get(int(seed_id))
+
+        if index is None:
+            raise KeyError(
+                f"Selected ID {int(seed_id)} is absent from the initial track."
+            )
+
+        theta_value = float(initial_track["r0_theta"][index])
+        phi_value = float(initial_track["r0_phi"][index])
+
+        if not (np.isfinite(theta_value) and np.isfinite(phi_value)):
+            raise ValueError(
+                f"Initial R0 coordinates are invalid for ID {int(seed_id)}."
+            )
+
+        r0_longitude_deg[iid] = phi_to_longitude_deg(phi_value)
+        r0_latitude_deg[iid] = theta_to_latitude_deg(theta_value)
 
     np.savez_compressed(
         filename,
@@ -1179,6 +1226,11 @@ def save_selected_ids(
             ],
             dtype=float,
         ),
+
+        # Initial R0 footpoint coordinates for each selected ID.
+        initial_r0_longitude_deg=r0_longitude_deg,
+
+        initial_r0_latitude_deg=r0_latitude_deg,
 
         angular_distance_deg=np.asarray(
             [
@@ -1280,7 +1332,26 @@ def remove_differential_rotation_drift(
 def read_selected_id_series(
     track_files,
     selected_ids,
+    surface="inner",
 ):
+    coordinate_keys = {
+        "inner": (
+            "inner_theta",
+            "inner_phi",
+        ),
+        "r0": (
+            "r0_theta",
+            "r0_phi",
+        ),
+    }
+
+    if surface not in coordinate_keys:
+        raise ValueError(
+            f"Unknown surface={surface!r}; use 'inner' or 'r0'."
+        )
+
+    theta_key, phi_key = coordinate_keys[surface]
+
     times = np.asarray(
         [
             time_hours
@@ -1333,19 +1404,8 @@ def read_selected_id_series(
             ]
         )
 
-        inner_theta = np.asarray(
-            track[
-                "inner_theta"
-            ],
-            dtype=float,
-        )
-
-        inner_phi = np.asarray(
-            track[
-                "inner_phi"
-            ],
-            dtype=float,
-        )
+        surface_theta = np.asarray(track[theta_key], dtype=float)
+        surface_phi = np.asarray(track[phi_key], dtype=float)
 
         for iid, seed_id in enumerate(
             selected_ids
@@ -1360,13 +1420,8 @@ def read_selected_id_series(
             if index is None:
                 continue
 
-            theta_value = inner_theta[
-                index
-            ]
-
-            phi_value = inner_phi[
-                index
-            ]
+            theta_value = surface_theta[index]
+            phi_value = surface_phi[index]
 
             if not (
                 np.isfinite(
@@ -1465,6 +1520,7 @@ def plot_tracked_footpoints(
     selected_ids,
     corrected_longitude,
     latitude,
+    surface_label="r_index = 0",
 ):
     fig, (
         ax_lon,
@@ -1527,7 +1583,7 @@ def plot_tracked_footpoints(
     )
 
     ax_lon.set_title(
-        "r_index = 0 footpoints: longitude "
+        f"{surface_label} footpoints: longitude "
         "(differential-rotation drift removed)"
     )
 
@@ -1548,7 +1604,7 @@ def plot_tracked_footpoints(
     )
 
     ax_lat.set_title(
-        "r_index = 0 footpoints: latitude"
+        f"{surface_label} footpoints: latitude"
     )
 
     if SHOW_GRID:
@@ -1690,11 +1746,12 @@ def main():
         ID_OUTPUT_FILE,
         selected_ids,
         match_info,
+        first_track,
         reference_time_hours=track_files[0][0],
     )
 
     print(
-        "\nSaved selected IDs and initial r_index=0 positions:"
+        "\nSaved selected IDs and initial r_index=0/R0 positions:"
         f"\n  {ID_OUTPUT_FILE}"
     )
 
@@ -1708,7 +1765,21 @@ def main():
     ) = read_selected_id_series(
         track_files,
         selected_ids,
+        surface="inner",
     )
+
+    (
+        r0_times,
+        r0_longitude,
+        r0_latitude,
+    ) = read_selected_id_series(
+        track_files,
+        selected_ids,
+        surface="r0",
+    )
+
+    if not np.array_equal(times, r0_times):
+        raise ValueError("Inner and R0 time axes do not match.")
 
     # print_selected_id_time_series(
     #     times,
@@ -1759,6 +1830,20 @@ def main():
             reference_time_hours,
         )
 
+    corrected_r0_longitude = np.full_like(
+        r0_longitude,
+        np.nan,
+        dtype=float,
+    )
+
+    for iid in range(len(selected_ids)):
+        corrected_r0_longitude[iid] = remove_differential_rotation_drift(
+            r0_longitude[iid],
+            r0_latitude[iid],
+            times,
+            reference_time_hours,
+        )
+
     print(
         "\nDifferential-rotation correction:"
         f"\n  reference time = "
@@ -1781,6 +1866,17 @@ def main():
         latitude,
     )
 
+    (
+        fig_r0_series,
+        axes_r0_series,
+    ) = plot_tracked_footpoints(
+        times,
+        selected_ids,
+        corrected_r0_longitude,
+        r0_latitude,
+        surface_label=f"R0 = {R0:g} Rs",
+    )
+
     # --------------------------------------------------------------
     # 9. Save / show
     # --------------------------------------------------------------
@@ -1797,14 +1893,25 @@ def main():
             bbox_inches="tight",
         )
 
+        fig_r0_series.savefig(
+            R0_TIME_SERIES_OUTPUT_FILE,
+            dpi=DPI,
+            bbox_inches="tight",
+        )
+
         print(
             "\nSaved:"
             f"\n  {TIME_SERIES_OUTPUT_FILE}"
+            f"\n  {R0_TIME_SERIES_OUTPUT_FILE}"
             f"\n  {ID_OUTPUT_FILE}"
         )
 
         plt.close(
             fig_series
+        )
+
+        plt.close(
+            fig_r0_series
         )
 
     else:

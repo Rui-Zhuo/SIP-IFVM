@@ -10,10 +10,13 @@ For every time listed in PLOT_TIME_HOURS, this script reads:
     open_closed_time.{time:.2f}.npz
     track_open.time.{time:.2f}.r0.{R0:g}.npz
 
-and plots:
+and, in "inner" mode, plots:
     - open_closed_map as pcolormesh
     - Br=0 contour
     - selected IDs at their r_index=0 footpoint positions
+
+In "r0" mode, it reads the initial R0 longitude/latitude saved in
+tracked_open_field_id.npz and plots them on the Br distribution at R0.
 """
 
 from __future__ import annotations
@@ -24,7 +27,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 
-from config import OPEN_CLOSED_DIR, TRACK_OPEN_DIR, WORK_ROOT
+from config import (
+    GRID_FILE,
+    LOCAL_MERGED_DIR,
+    OPEN_CLOSED_DIR,
+    TRACK_OPEN_DIR,
+    WORK_ROOT,
+)
+from read_merged_sip_data import read_merged_physics
 
 
 # ======================================================================
@@ -40,6 +50,13 @@ ID_FILE = (
 )
 
 R0 = 10.0
+
+# "inner": preserve the existing r_index=0 topology maps.
+# "r0": plot the saved initial R0 positions on Br(r=R0).
+PLOT_MODE = "inner"
+
+# Directory containing xx_yy_merged_spherical.h5 files for R0 Br maps.
+MERGED_DIR = LOCAL_MERGED_DIR
 
 # Any desired times [h].
 # PLOT_TIME_HOURS = [
@@ -84,6 +101,9 @@ CLASS_NORM = BoundaryNorm(
     CLASS_CMAP.N,
 )
 
+BR_CMAP = "seismic"
+BR_CLIM_PERCENTILE = 99.5
+
 BR_ZERO_CONTOUR_COLOR = "black"
 BR_ZERO_CONTOUR_LINEWIDTH = 1.0
 
@@ -103,6 +123,18 @@ def output_filename(
         WORK_DIR
         / (
             f"tracked_open_map.time.{simulation_hours:.2f}."
+            f"r0.{R0:g}.png"
+        )
+    )
+
+
+def r0_output_filename(
+    simulation_hours,
+):
+    return (
+        WORK_DIR
+        / (
+            f"tracked_open_r0_map.time.{simulation_hours:.2f}."
             f"r0.{R0:g}.png"
         )
     )
@@ -131,6 +163,13 @@ def track_filename(
             f"r0.{R0:g}.npz"
         )
     )
+
+
+def merged_filename(
+    simulation_hours,
+):
+    time_tag = f"{float(simulation_hours):.2f}".replace(".", "_")
+    return MERGED_DIR / f"{time_tag}_merged_spherical.h5"
 
 
 # ======================================================================
@@ -164,6 +203,69 @@ def load_selected_ids(
         ).copy()
 
     return ids
+
+
+def load_initial_r0_positions(
+    filename=ID_FILE,
+):
+    """Read selected IDs and their initial R0 longitude/latitude."""
+    filename = Path(filename)
+
+    if not filename.exists():
+        raise FileNotFoundError(filename)
+
+    required = (
+        "id",
+        "initial_r0_longitude_deg",
+        "initial_r0_latitude_deg",
+        "reference_time_hours",
+        "r0",
+    )
+
+    with np.load(filename, allow_pickle=False) as f:
+        missing = [key for key in required if key not in f]
+
+        if missing:
+            raise KeyError(
+                f"Missing {missing} in {filename}. Re-run "
+                "plot_tracked_open_series.py to create the R0 coordinates."
+            )
+
+        ids = np.asarray(f["id"], dtype=np.int64).copy()
+        longitude_deg = np.asarray(
+            f["initial_r0_longitude_deg"],
+            dtype=float,
+        ).copy()
+        latitude_deg = np.asarray(
+            f["initial_r0_latitude_deg"],
+            dtype=float,
+        ).copy()
+        reference_time_hours = float(f["reference_time_hours"])
+        saved_r0 = float(f["r0"])
+
+    if longitude_deg.shape != ids.shape or latitude_deg.shape != ids.shape:
+        raise ValueError(
+            "Initial R0 longitude/latitude arrays must match the ID array."
+        )
+
+    if not np.isclose(saved_r0, R0, rtol=0.0, atol=1.0e-8):
+        raise ValueError(
+            f"ID file was created for R0={saved_r0:g} Rs, "
+            f"but R0={R0:g} Rs is configured."
+        )
+
+    if not (
+        np.all(np.isfinite(longitude_deg))
+        and np.all(np.isfinite(latitude_deg))
+    ):
+        raise ValueError("Initial R0 coordinates contain NaN or Inf values.")
+
+    return (
+        ids,
+        longitude_deg % 360.0,
+        latitude_deg,
+        reference_time_hours,
+    )
 
 
 # ======================================================================
@@ -234,6 +336,75 @@ def load_open_closed_map(
         open_closed_map,
         Br_surface,
     )
+
+
+def load_br_at_r0(
+    filename,
+    r0=R0,
+):
+    """Load Br and linearly interpolate it to the requested R0 sphere."""
+    filename = Path(filename)
+
+    if not filename.exists():
+        raise FileNotFoundError(filename)
+
+    data = read_merged_physics(
+        filename=filename,
+        grid_filename=GRID_FILE,
+    )
+
+    r = np.asarray(data["r"], dtype=float)
+    theta = np.asarray(data["theta"], dtype=float)
+    phi = np.asarray(data["phi"], dtype=float)
+    br = np.asarray(data["Br"], dtype=float)
+
+    if not (r[0] <= r0 <= r[-1]):
+        raise ValueError(
+            f"R0={r0:g} Rs is outside [{r[0]:g}, {r[-1]:g}] Rs."
+        )
+
+    upper_index = int(np.searchsorted(r, r0, side="left"))
+
+    if upper_index == 0 or np.isclose(r[upper_index], r0):
+        br_r0 = br[upper_index]
+        lower_radius = float(r[upper_index])
+        upper_radius = float(r[upper_index])
+    else:
+        lower_index = upper_index - 1
+        lower_radius = float(r[lower_index])
+        upper_radius = float(r[upper_index])
+        weight = (float(r0) - lower_radius) / (upper_radius - lower_radius)
+        br_r0 = (1.0 - weight) * br[lower_index] + weight * br[upper_index]
+
+    expected_shape = (theta.size, phi.size)
+
+    if br_r0.shape != expected_shape:
+        raise ValueError(
+            f"Br(R0).shape={br_r0.shape}, expected {expected_shape}."
+        )
+
+    if not np.all(np.isfinite(br_r0)):
+        raise ValueError("Br(R0) contains NaN or Inf values.")
+
+    return theta, phi, br_r0, lower_radius, upper_radius
+
+
+def choose_br_clim(
+    br_surface,
+):
+    """Return a symmetric robust color range for Br [G]."""
+    finite = np.asarray(br_surface, dtype=float)
+    finite = finite[np.isfinite(finite)]
+
+    if finite.size == 0:
+        raise ValueError("Br surface has no finite values.")
+
+    limit = float(np.percentile(np.abs(finite), BR_CLIM_PERCENTILE))
+
+    if limit <= 0.0:
+        limit = float(np.max(np.abs(finite)))
+
+    return (-limit, limit) if limit > 0.0 else (-1.0, 1.0)
 
 
 # ======================================================================
@@ -538,14 +709,146 @@ def plot_map(
     )
 
 
+def plot_r0_map(
+    theta,
+    phi,
+    br_r0,
+    selected_ids,
+    longitude_deg,
+    latitude_deg,
+    simulation_hours,
+):
+    """Plot saved initial R0 positions over Br interpolated to R0."""
+    phi_wrap, br_wrap = wrap_phi_surface(phi, br_r0)
+    longitude_axis_deg = phi_to_longitude_deg(phi_wrap)
+    longitude_axis_deg[-1] = longitude_axis_deg[0] + 360.0
+    latitude_axis_deg = theta_to_latitude_deg(theta)
+    br_clim = choose_br_clim(br_r0)
+
+    fig, ax = plt.subplots(
+        figsize=FIGSIZE,
+        constrained_layout=True,
+    )
+
+    image = ax.pcolormesh(
+        longitude_axis_deg,
+        latitude_axis_deg,
+        br_wrap,
+        shading="auto",
+        cmap=BR_CMAP,
+        vmin=br_clim[0],
+        vmax=br_clim[1],
+    )
+
+    default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+    for iid, (seed_id, lon, lat) in enumerate(
+        zip(selected_ids, longitude_deg, latitude_deg)
+    ):
+        color = default_colors[iid % len(default_colors)]
+
+        ax.scatter(
+            lon,
+            lat,
+            s=ID_POINT_SIZE,
+            marker=ID_POINT_MARKER,
+            color=color,
+            edgecolors="black",
+            linewidths=0.4,
+            zorder=5,
+        )
+
+        if ADD_ID_TEXT:
+            ax.text(
+                lon,
+                lat,
+                f" {int(seed_id)}",
+                color=color,
+                fontsize=ID_TEXT_FONTSIZE,
+                va="center",
+                zorder=6,
+            )
+
+    ax.set_xlim(0.0, 360.0)
+    ax.set_ylim(-90.0, 90.0)
+    ax.set_xlabel("Longitude [deg]")
+    ax.set_ylabel("Latitude [deg]")
+    ax.set_title(
+        f"Br and initial tracked IDs at R0 = {R0:g} Rs "
+        f"({simulation_hours:.2f} h)"
+    )
+
+    cbar = fig.colorbar(
+        image,
+        ax=ax,
+        orientation="vertical",
+        pad=0.02,
+    )
+    cbar.set_label("Br [G]")
+
+    return fig, ax
+
+
 # ======================================================================
 # MAIN
 # ======================================================================
 
 def main():
-    selected_ids = load_selected_ids(
-        ID_FILE
-    )
+    mode = str(PLOT_MODE).strip().lower()
+
+    if mode not in {"inner", "r0"}:
+        raise ValueError("PLOT_MODE must be 'inner' or 'r0'.")
+
+    if mode == "r0":
+        (
+            selected_ids,
+            longitude_deg,
+            latitude_deg,
+            reference_time_hours,
+        ) = load_initial_r0_positions(ID_FILE)
+
+        data_file = merged_filename(reference_time_hours)
+
+        (
+            theta,
+            phi,
+            br_r0,
+            lower_radius,
+            upper_radius,
+        ) = load_br_at_r0(data_file, R0)
+
+        print(
+            "R0 map:"
+            f"\n  ID file        = {ID_FILE}"
+            f"\n  merged data    = {data_file}"
+            f"\n  reference time = {reference_time_hours:.2f} h"
+            f"\n  Br interpolation= [{lower_radius:.8g}, "
+            f"{upper_radius:.8g}] Rs -> {R0:.8g} Rs"
+            f"\n  IDs            = {selected_ids.tolist()}"
+        )
+
+        fig, ax = plot_r0_map(
+            theta,
+            phi,
+            br_r0,
+            selected_ids,
+            longitude_deg,
+            latitude_deg,
+            reference_time_hours,
+        )
+
+        if SAVE_OR_NOT:
+            output_file = r0_output_filename(reference_time_hours)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(output_file, dpi=DPI, bbox_inches="tight")
+            plt.close(fig)
+            print(f"Saved:\n  {output_file}")
+        else:
+            plt.show()
+
+        return
+
+    selected_ids = load_selected_ids(ID_FILE)
 
     plot_times = np.atleast_1d(
         np.asarray(
