@@ -17,11 +17,11 @@ At the initial time T0:
 4. Keep only field lines for which one branch reaches r_index=0 and the
    other branch reaches OPEN_RADIUS.
 5. Save, for every ID:
-       - current R0 footpoint theta, phi
+       - current R0 crossing theta, phi
        - current r_index=0 footpoint theta, phi
        - predicted r, theta, phi after DT_HOURS
 6. The predicted position is computed from Vr, Vtheta, Vphi at the
-   current R0 footpoint.
+   current R0 crossing.
 
 At every later time:
 
@@ -46,6 +46,9 @@ Notes
 - r is measured in solar radii (Rs).
 - velocities are expected in km/s, consistent with the merged SIP-IFVM
   physical files used by the existing plotting scripts.
+
+Outputs: one `track_open.time.<t>.r0.<R0>.npz` file per time, containing
+paired r_index=0 footpoints and R0 crossings for persistent global IDs.
 - theta is colatitude [rad].
 - phi is longitude [rad], periodic over 2*pi.
 """
@@ -1279,7 +1282,7 @@ def trace_batch_inward(
         dtype=bool,
     )
 
-    # If seed is already on R0, that point is the R0 footpoint.
+    # If a seed is already on R0, that point is the R0 crossing.
     initially_on_r0 = (
         np.abs(
             states[:, 0]
@@ -1843,7 +1846,7 @@ def advance_r0_seeds_with_velocity(
     velocity_interpolator,
 ):
     """
-    Advance current R0 footpoints by DT_HOURS using Vr,Vtheta,Vphi.
+    Advance current R0 crossings by DT_HOURS using Vr,Vtheta,Vphi.
 
     For forward Euler:
 

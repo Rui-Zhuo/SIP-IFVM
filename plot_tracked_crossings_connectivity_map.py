@@ -1,10 +1,10 @@
 """
-plot_tracked_open_field_map.py
+plot_open_boundary_footpoints_crossings.py
 
 Plot open/closed topology and tracked ID positions at any requested time.
 
-The selected IDs are read from:
-    tracked_open_field_id.npz
+The selected footpoints/crossings are read from:
+    selected_open_boundary_footpoints_crossings.r.{R0}.npz
 
 For every time listed in PLOT_TIME_HOURS, this script reads:
     open_closed_time.{time:.2f}.npz
@@ -15,8 +15,11 @@ and, in "inner" mode, plots:
     - Br=0 contour
     - selected IDs at their r_index=0 footpoint positions
 
-In "r0" mode, it reads the initial R0 longitude/latitude saved in
-tracked_open_field_id.npz and plots them on the Br distribution at R0.
+In "r0" mode, it reads the initial crossing longitude/latitude and plots
+them on the Br distribution at R0.
+
+Outputs: `open_boundary_footpoint_map.time.<t>.crossing-r.<R0>.png` in
+inner mode, or `open_boundary_crossing_map.time.<t>.r.<R0>.png` in r0 mode.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ from config import (
     TRACK_OPEN_DIR,
     WORK_ROOT,
 )
+from figure_provenance import add_figure_provenance
 from read_merged_sip_data import read_merged_physics
 
 
@@ -43,13 +47,12 @@ from read_merged_sip_data import read_merged_physics
 
 WORK_DIR = WORK_ROOT
 TRACK_DIR = TRACK_OPEN_DIR
+R0 = 10.0
 
 ID_FILE = (
     WORK_DIR
-    / "tracked_open_field_id.npz"
+    / f"selected_open_boundary_footpoints_crossings.r.{R0:g}.npz"
 )
-
-R0 = 10.0
 
 # "inner": preserve the existing r_index=0 topology maps.
 # "r0": plot the saved initial R0 positions on Br(r=R0).
@@ -122,8 +125,8 @@ def output_filename(
     return (
         WORK_DIR
         / (
-            f"tracked_open_map.time.{simulation_hours:.2f}."
-            f"r0.{R0:g}.png"
+            f"open_boundary_footpoint_map.time.{simulation_hours:.2f}."
+            f"crossing-r.{R0:g}.png"
         )
     )
 
@@ -134,8 +137,8 @@ def r0_output_filename(
     return (
         WORK_DIR
         / (
-            f"tracked_open_r0_map.time.{simulation_hours:.2f}."
-            f"r0.{R0:g}.png"
+            f"open_boundary_crossing_map.time.{simulation_hours:.2f}."
+            f"r.{R0:g}.png"
         )
     )
 
@@ -228,7 +231,7 @@ def load_initial_r0_positions(
         if missing:
             raise KeyError(
                 f"Missing {missing} in {filename}. Re-run "
-                "plot_tracked_open_series.py to create the R0 coordinates."
+                "plot_tracked_crossings_connectivity_series.py to create the R0 coordinates."
             )
 
         ids = np.asarray(f["id"], dtype=np.int64).copy()
@@ -840,6 +843,7 @@ def main():
         if SAVE_OR_NOT:
             output_file = r0_output_filename(reference_time_hours)
             output_file.parent.mkdir(parents=True, exist_ok=True)
+            add_figure_provenance(fig, "plot_open_boundary_footpoints_crossings.py")
             fig.savefig(output_file, dpi=DPI, bbox_inches="tight")
             plt.close(fig)
             print(f"Saved:\n  {output_file}")
@@ -945,6 +949,7 @@ def main():
                 exist_ok=True,
             )
 
+            add_figure_provenance(fig, "plot_open_boundary_footpoints_crossings.py")
             fig.savefig(
                 output_file,
                 dpi=DPI,

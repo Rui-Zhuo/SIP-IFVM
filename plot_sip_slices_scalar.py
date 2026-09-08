@@ -31,6 +31,9 @@ If a density clim is given, both limits must be > 0.
 If clim is None, the automatic lower/upper limits are determined only
 from finite positive values in that slice.
 
+Outputs: selected `Br`, `Vr`, `Vh`, and density slice PNG files in the
+configured slice-output subdirectories.
+
 Example
 -------
 from read_merged_data import read_merged_physics
@@ -59,6 +62,7 @@ from matplotlib.colors import Normalize, LogNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from config import GRID_FILE, LOCAL_MERGED_DIR, SLICE_DIR
+from figure_provenance import add_figure_provenance
 from read_merged_sip_data import (
     read_merged_physics,
     select_merged_data_files,
@@ -1051,6 +1055,7 @@ if __name__ == "__main__":
             )
 
             if SAVE_OR_NOT:
+                add_figure_provenance(plt.gcf(), "plot_sip_slices_scalar.py")
                 plt.savefig(
                     OUTPUT_DIR
                     / "Br"
@@ -1081,6 +1086,7 @@ if __name__ == "__main__":
             )
 
             if SAVE_OR_NOT:
+                add_figure_provenance(plt.gcf(), "plot_sip_slices_scalar.py")
                 plt.savefig(
                     OUTPUT_DIR
                     / "Vr"
@@ -1111,6 +1117,7 @@ if __name__ == "__main__":
             )
 
             if SAVE_OR_NOT:
+                add_figure_provenance(plt.gcf(), "plot_sip_slices_scalar.py")
                 plt.savefig(
                     OUTPUT_DIR
                     / "Vh"
@@ -1141,6 +1148,7 @@ if __name__ == "__main__":
             )
 
             if SAVE_OR_NOT:
+                add_figure_provenance(plt.gcf(), "plot_sip_slices_scalar.py")
                 plt.savefig(
                     OUTPUT_DIR
                     / "n"

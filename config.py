@@ -18,6 +18,16 @@ DATA_ROOT = RESEARCH_ROOT / "Data" / "SIP-IFVM"
 CODE_ROOT = RESEARCH_ROOT / "Program" / "SIP-IFVM"
 WORK_ROOT = RESEARCH_ROOT / "Work" / "Coronal_hole_by_SIP"
 
+# Coronal-hole region of interest on the r_index=0 footpoint surface.
+# The low/mid-latitude window is defined at CH_REGION_REFERENCE_TIME_HOURS
+# and advected with the differential-rotation law in utils.py.
+CH_REGION_REFERENCE_TIME_HOURS = 82.10
+CH_REGION_NORTH_LATITUDE_MIN_DEG = 60.0
+CH_REGION_LOW_MID_LON_MIN_DEG = 0.0
+CH_REGION_LOW_MID_LON_MAX_DEG = 100.0
+CH_REGION_LOW_MID_LAT_MIN_DEG = -60.0
+CH_REGION_LOW_MID_LAT_MAX_DEG = 60.0
+
 # Fixed grid location
 GRID_DIR = DATA_ROOT / "grid"
 GRID_PATH = GRID_DIR
@@ -43,10 +53,10 @@ LOG_DIR = WORK_ROOT / "logs"
 SLICE_DIR = WORK_ROOT / "slices"
 FIELDLINE_DIR = WORK_ROOT / "fieldlines"
 OPEN_CLOSED_DIR = WORK_ROOT / "open_closed"
-TRACK_OPEN_DIR = WORK_ROOT / "track_open"
+TRACK_OPEN_DIR = WORK_ROOT / "track_crossings"
 
 # Common output directories on the external drive
-FULL_TRACK_OPEN_DIR = FULL_DATA_ROOT / "track_open"
+FULL_TRACK_OPEN_DIR = FULL_DATA_ROOT / "track_crossings"
 FULL_SLICE_DIR = FULL_DATA_ROOT / "slices"
 FULL_VECTOR_SLICE_DIR = FULL_DATA_ROOT / "slices_vector"
 FULL_OPEN_CLOSED_DIR = FULL_DATA_ROOT / "open_closed"

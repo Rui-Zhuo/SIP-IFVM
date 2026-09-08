@@ -28,6 +28,9 @@ The classification itself is:
      0 : closed field
 
 Unresolved / unvisited points are treated as 0 before categorical smoothing.
+
+Outputs: `open_closed_time.<t>.npz` topology maps and matching
+`open_closed_time.<t>.png` diagnostic figures.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 from scipy.ndimage import gaussian_filter, convolve
 
 from config import FULL_MERGED_DIR, FULL_OPEN_CLOSED_DIR, GRID_FILE
+from figure_provenance import add_figure_provenance
 from read_merged_sip_data import (
     read_merged_grid,
     read_merged_physics,
@@ -1961,6 +1965,7 @@ def plot_results(
     except Exception:
         pass
 
+    add_figure_provenance(fig, "classify_open_closed_states.py")
     fig.savefig(
         output_png,
         dpi=DPI,

@@ -14,6 +14,8 @@ Main features
     - process one specified file
     - process all merged HDF5 files in a folder
 
+Outputs: `Bt_Bp_vt_vp_time.<t>.idr.<radius>.png` vector-shell figures.
+
 2. Flexible shell selection:
     - by radial_index
     - by physical radius r [Rs] (nearest radial layer is used)
@@ -54,6 +56,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from config import GRID_FILE, LOCAL_MERGED_DIR, SLICE_DIR
+from figure_provenance import add_figure_provenance
 from read_merged_sip_data import (
     read_merged_physics,
     select_merged_data_files,
@@ -884,6 +887,7 @@ if __name__ == "__main__":
                 requested_radius=REQUESTED_RADIUS,
             )
 
+            add_figure_provenance(fig, "plot_sip_slices_vector.py")
             fig.savefig(
                 OUTPUT_DIR
                 / (

@@ -3,7 +3,11 @@
 Dependencies: numpy==1.26.4, scipy>=1.10,<1.15.
 The first advance samples the LCT map directly on its native seed grid;
 later advances bilinearly interpolate each new velocity map at the advected
-positions.  Each saved file contains theta and phi [rad] for all seeds.
+positions. Each saved file contains persistent `id`, theta, and phi [rad]
+for all seeds; IDs are identical at every saved time.
+
+Outputs: `lct_footpoint_track.time.<t>.npz` for each time and
+`lct_footpoint_track_manifest.npz`.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 
 from config import WORK_ROOT
+from utils import differential_rotation_rate_deg_per_day
 
 
 # ======================================================================
@@ -26,10 +31,6 @@ OUTPUT_DIR = WORK_ROOT / "lct_surface_tracks"
 R_SUN_KM = 695700.0
 POLAR_SIN_THETA_MIN = 0.05
 
-# Used only where LCT is invalid or below its configured correlation cutoff.
-DIFFROT_A_DEG_PER_DAY = 14.713
-DIFFROT_B_DEG_PER_DAY = -2.396
-DIFFROT_C_DEG_PER_DAY = -1.787
 RANDOM_SEED = 42
 
 
@@ -38,17 +39,17 @@ RANDOM_SEED = 42
 # ======================================================================
 
 VELOCITY_PATTERN = re.compile(
-    r"^lct_velocity\.time\.([0-9]+(?:\.[0-9]+)?)_to_"
-    r"([0-9]+(?:\.[0-9]+)?)\.rindex0\.npz$"
+    r"^lct_footpoint_velocity\.time\.([0-9]+(?:\.[0-9]+)?)_to_"
+    r"([0-9]+(?:\.[0-9]+)?)\.npz$"
 )
 
 
 def track_filename(time_hours: float) -> Path:
-    return OUTPUT_DIR / f"lct_track.time.{time_hours:.2f}.rindex0.npz"
+    return OUTPUT_DIR / f"lct_footpoint_track.time.{time_hours:.2f}.npz"
 
 
 def manifest_filename() -> Path:
-    return OUTPUT_DIR / "lct_track_manifest.rindex0.npz"
+    return OUTPUT_DIR / "lct_footpoint_track_manifest.npz"
 
 
 def discover_velocity_files() -> list[tuple[float, float, Path]]:
@@ -107,17 +108,6 @@ def load_velocity_map(filename: Path) -> dict[str, np.ndarray | float]:
 # SPHERICAL ADVECTION
 # ======================================================================
 
-def differential_rotation_rate_deg_per_day(latitude_deg: np.ndarray) -> np.ndarray:
-    """Return the fallback differential-rotation rate in deg day^-1."""
-    latitude_rad = np.radians(latitude_deg)
-    sin2 = np.sin(latitude_rad) ** 2
-    return (
-        DIFFROT_A_DEG_PER_DAY
-        + DIFFROT_B_DEG_PER_DAY * sin2
-        + DIFFROT_C_DEG_PER_DAY * sin2**2
-    )
-
-
 def fractional_grid_coordinates(theta: np.ndarray, phi: np.ndarray, grid_theta: np.ndarray, grid_phi: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Convert physical theta-phi points to fractional uniform-grid indices."""
     dtheta = float(np.mean(np.diff(grid_theta)))
@@ -167,12 +157,13 @@ def advance_positions(theta: np.ndarray, phi: np.ndarray, velocity_theta: np.nda
     return theta_next, phi_next, finite_lct
 
 
-def save_track(time_hours: float, theta: np.ndarray, phi: np.ndarray, seed_shape: tuple[int, int], step_valid_fraction: float | None) -> Path:
+def save_track(time_hours: float, ids: np.ndarray, theta: np.ndarray, phi: np.ndarray, seed_shape: tuple[int, int], step_valid_fraction: float | None) -> Path:
     """Save all Lagrangian r_index=0 positions at one time."""
     output_file = track_filename(time_hours)
     np.savez_compressed(
         output_file,
         time_hours=float(time_hours),
+        id=np.asarray(ids, dtype=np.int64),
         seed_shape=np.asarray(seed_shape, dtype=np.int32),
         theta_rad=theta.astype(np.float32),
         phi_rad=phi.astype(np.float32),
@@ -195,10 +186,11 @@ def main() -> None:
     seed_theta_grid, seed_phi_grid = np.meshgrid(grid_theta, grid_phi, indexing="ij")
     theta = seed_theta_grid.ravel().copy()
     phi = seed_phi_grid.ravel().copy()
+    ids = np.arange(theta.size, dtype=np.int64)
     seed_shape = seed_theta_grid.shape
 
     saved_times = [float(first_map["time_start_hours"])]
-    saved_files = [str(save_track(saved_times[0], theta, phi, seed_shape, None).name)]
+    saved_files = [str(save_track(saved_times[0], ids, theta, phi, seed_shape, None).name)]
 
     for step, (time_start, time_end, filename) in enumerate(entries):
         velocity = load_velocity_map(filename)
@@ -221,7 +213,7 @@ def main() -> None:
             theta, phi, velocity_theta, velocity_phi, valid,
             float(velocity["surface_radius_rs"]), float(velocity["dt_hours"]),
         )
-        output_file = save_track(time_end, theta, phi, seed_shape, float(np.mean(used_lct)))
+        output_file = save_track(time_end, ids, theta, phi, seed_shape, float(np.mean(used_lct)))
         saved_times.append(time_end)
         saved_files.append(str(output_file.name))
         print(f"[{step + 1}/{len(entries)}] {time_start:.2f}->{time_end:.2f} h | LCT={np.mean(used_lct):.2%} | saved={output_file}")
@@ -231,6 +223,7 @@ def main() -> None:
         times_hours=np.asarray(saved_times, dtype=float),
         filenames=np.asarray(saved_files),
         seed_shape=np.asarray(seed_shape, dtype=np.int32),
+        id=ids,
         velocity_directory=str(VELOCITY_DIR),
         random_seed=RANDOM_SEED,
     )

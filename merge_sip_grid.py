@@ -19,6 +19,9 @@ Requirements:
     scipy
     h5py
 
+Outputs: one configured merged-grid HDF5 file containing `r`, `theta`, `phi`,
+Cartesian coordinates, and the source-component map.
+
 Default input:
     config.GRID_DIR
         0_00_0Gridskip1.h5

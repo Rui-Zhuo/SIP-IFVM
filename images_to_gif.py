@@ -1,3 +1,8 @@
+"""Convert a time-ordered PNG sequence to a GIF.
+
+Outputs: one user-configured `.gif` file.  It does not alter input PNG files.
+"""
+
 import os
 import re
 
@@ -135,22 +140,9 @@ def image2gif(image_dir, gif_path, fps=3, loop=0):
     )
 
 
-root_dir = FULL_SLICE_DIR / "82d1to132"
-sub_dir = "vr"
-
-image_dir = os.path.join(
-    root_dir,
-    sub_dir + "/",
-)
-
-gif_path = os.path.join(
-    root_dir,
-    sub_dir + ".gif",
-)
-
-image2gif(
-    image_dir=image_dir,
-    gif_path=gif_path,
-    fps=8,
-    loop=0,
-)
+if __name__ == "__main__":
+    root_dir = FULL_SLICE_DIR / "82d1to132"
+    sub_dir = "vr"
+    image_dir = os.path.join(root_dir, sub_dir)
+    gif_path = os.path.join(root_dir, sub_dir + ".gif")
+    image2gif(image_dir=image_dir, gif_path=gif_path, fps=8, loop=0)

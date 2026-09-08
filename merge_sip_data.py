@@ -52,6 +52,9 @@ Default input:
 Default output:
     OUTPUT_DIR
         82_00_merged_spherical.h5
+
+Outputs: one `<time>_merged_spherical.h5` file per processed time, with
+normalized and physical-unit plasma and magnetic-field variables.
 """
 
 from __future__ import annotations

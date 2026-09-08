@@ -3,6 +3,9 @@
 Dependencies: numpy==1.26.4, matplotlib==3.10.8.
 Br is read in G; surface areas are cm^2, magnetic fluxes are Mx,
 and boundary lengths are saved in cm and Mm.
+
+Outputs: one polarity-specific `open_field_topology.<sign>.npz` file and its
+matching `open_field_topology.<sign>.png` figure.
 """
 
 from __future__ import annotations
@@ -13,7 +16,19 @@ import re
 import matplotlib.pyplot as plt
 import numpy as np
 
-from config import OPEN_CLOSED_DIR, WORK_ROOT
+from figure_provenance import add_figure_provenance
+
+from config import (
+    CH_REGION_LOW_MID_LAT_MAX_DEG,
+    CH_REGION_LOW_MID_LAT_MIN_DEG,
+    CH_REGION_LOW_MID_LON_MAX_DEG,
+    CH_REGION_LOW_MID_LON_MIN_DEG,
+    CH_REGION_NORTH_LATITUDE_MIN_DEG,
+    CH_REGION_REFERENCE_TIME_HOURS,
+    OPEN_CLOSED_DIR,
+    WORK_ROOT,
+)
+from utils import longitude_interval_mask, rotate_longitude_deg
 
 
 # ======================================================================
@@ -24,6 +39,9 @@ INPUT_DIR = OPEN_CLOSED_DIR
 OUTPUT_DIR = WORK_ROOT / "open_flux_area"
 OPEN_CLOSED_TAG = "rindex0"
 R_SUN_CM = 6.957e10
+
+# Open-field topology label to analyse: -1 for negative, +1 for positive.
+OPEN_FIELD_POLARITY = -1
 
 SAVE_FIGURE = True
 DPI = 250
@@ -104,13 +122,41 @@ def surface_cell_area(theta: np.ndarray, phi: np.ndarray, radius_rs: float) -> n
     return np.broadcast_to(row_area[:, None], (theta.size, phi.size)).copy()
 
 
+def coronal_hole_region_mask(theta: np.ndarray, phi: np.ndarray, time_hours: float) -> np.ndarray:
+    """Return the union of the north polar cap and differentially rotated ROI."""
+    latitude = 90.0 - np.degrees(np.asarray(theta, dtype=float))
+    longitude = np.degrees(np.asarray(phi, dtype=float)) % 360.0
+    north_mask = latitude[:, None] >= CH_REGION_NORTH_LATITUDE_MIN_DEG
+    rotated_lower = rotate_longitude_deg(
+        CH_REGION_LOW_MID_LON_MIN_DEG,
+        latitude,
+        float(time_hours) - CH_REGION_REFERENCE_TIME_HOURS,
+    )
+    rotated_upper = rotate_longitude_deg(
+        CH_REGION_LOW_MID_LON_MAX_DEG,
+        latitude,
+        float(time_hours) - CH_REGION_REFERENCE_TIME_HOURS,
+    )
+    longitude_mask = np.vstack(
+        [longitude_interval_mask(longitude, lower, upper) for lower, upper in zip(rotated_lower, rotated_upper)]
+    )
+    low_mid_mask = (
+        (latitude[:, None] >= CH_REGION_LOW_MID_LAT_MIN_DEG)
+        & (latitude[:, None] <= CH_REGION_LOW_MID_LAT_MAX_DEG)
+        & longitude_mask
+    )
+    return north_mask | low_mid_mask
+
+
 def open_closed_boundary_length(
     theta: np.ndarray,
     phi: np.ndarray,
     labels: np.ndarray,
     radius_rs: float,
+    region_mask: np.ndarray,
+    polarity: int,
 ) -> float:
-    """Return total boundary length between open (|label|=1) and closed (0)."""
+    """Return selected-polarity/closed interface length inside the analysis region."""
     theta = np.asarray(theta, dtype=float)
     phi = np.asarray(phi, dtype=float)
     labels = np.asarray(labels, dtype=np.int8)
@@ -118,6 +164,11 @@ def open_closed_boundary_length(
     expected_shape = (theta.size, phi.size)
     if labels.shape != expected_shape:
         raise ValueError(f"labels.shape={labels.shape}, expected {expected_shape}")
+    region_mask = np.asarray(region_mask, dtype=bool)
+    if region_mask.shape != expected_shape:
+        raise ValueError(f"region_mask.shape={region_mask.shape}, expected {expected_shape}")
+    if int(polarity) not in {-1, 1}:
+        raise ValueError("polarity must be -1 or +1.")
 
     if phi.size < 2:
         raise ValueError("phi must contain at least two samples.")
@@ -131,11 +182,16 @@ def open_closed_boundary_length(
 
     theta_edges = theta_cell_edges(theta)
     radius_cm = float(radius_rs) * R_SUN_CM
-    open_mask = np.abs(labels) == 1
+    selected_open = labels == int(polarity)
+    closed_mask = labels == 0
     total_length_cm = 0.0
 
     # Interfaces between adjacent theta rows. The shared edge runs in phi.
-    theta_transition = open_mask[:-1, :] != open_mask[1:, :]
+    theta_transition = (
+        ((selected_open[:-1, :] & closed_mask[1:, :]) | (closed_mask[:-1, :] & selected_open[1:, :]))
+        & region_mask[:-1, :]
+        & region_mask[1:, :]
+    )
     if np.any(theta_transition):
         interface_theta = theta_edges[1:-1]
         edge_length = radius_cm * np.sin(interface_theta) * phi_step
@@ -143,7 +199,11 @@ def open_closed_boundary_length(
         total_length_cm += float(np.sum(edge_length * counts, dtype=np.float64))
 
     # Interfaces between adjacent phi columns. Phi is periodic.
-    phi_transition = open_mask != np.roll(open_mask, shift=-1, axis=1)
+    phi_transition = (
+        ((selected_open & np.roll(closed_mask, shift=-1, axis=1)) | (closed_mask & np.roll(selected_open, shift=-1, axis=1)))
+        & region_mask
+        & np.roll(region_mask, shift=-1, axis=1)
+    )
     if np.any(phi_transition):
         theta_width = np.diff(theta_edges)
         edge_length = radius_cm * theta_width
@@ -158,59 +218,43 @@ def open_closed_boundary_length(
 # ======================================================================
 
 def region_metrics(mask: np.ndarray, area_cm2: np.ndarray, br_gauss: np.ndarray) -> tuple[float, float, float]:
-    """Return area, signed flux, and unsigned flux for one region."""
+    """Return selected-region area, signed flux, and unsigned flux."""
     area = float(np.sum(area_cm2[mask], dtype=np.float64))
     signed_flux = float(np.sum(br_gauss[mask] * area_cm2[mask], dtype=np.float64))
     unsigned_flux = float(np.sum(np.abs(br_gauss[mask]) * area_cm2[mask], dtype=np.float64))
     return area, signed_flux, unsigned_flux
 
 
-def make_figure(times: np.ndarray, metrics: dict[str, np.ndarray]) -> plt.Figure:
-    """Plot area, unsigned flux, and signed flux for open-field regions."""
-    labels = (("positive", "Open (+)"), ("negative", "Open (-)"), ("all", "All open"))
-    colors = {"positive": "firebrick", "negative": "royalblue", "all": "black"}
+def make_figure(times: np.ndarray, area_cm2: np.ndarray, signed_flux_mx: np.ndarray, boundary_length_cm: np.ndarray) -> plt.Figure:
+    """Plot one selected-polarity area, signed-flux, and boundary-length series."""
     fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True, constrained_layout=True)
-    panels = (("area_cm2", "Area [$10^{21}$ cm$^2$]", 1.0e21), ("unsigned_flux_mx", "Unsigned flux [$10^{21}$ Mx]", 1.0e21), ("signed_flux_mx", "Signed flux [$10^{21}$ Mx]", 1.0e21))
-
-    for ax, (metric, ylabel, scale) in zip(axes, panels):
-        for key, label in labels:
-            ax.plot(times, metrics[f"{key}_{metric}"] / scale, marker="o", markersize=2.5, linewidth=1.2, color=colors[key], label=label)
-        ax.set_ylabel(ylabel)
-        ax.grid(True, alpha=0.3)
-
-    axes[0].legend(ncol=3, fontsize=9)
+    color = "royalblue" if OPEN_FIELD_POLARITY == -1 else "firebrick"
+    sign_label = "Open (-)" if OPEN_FIELD_POLARITY == -1 else "Open (+)"
+    axes[0].plot(times, area_cm2 / 1.0e21, marker="o", markersize=2.5, linewidth=1.2, color=color)
+    axes[1].plot(times, signed_flux_mx / 1.0e21, marker="o", markersize=2.5, linewidth=1.2, color=color)
+    axes[2].plot(times, boundary_length_cm / 1.0e8, marker="o", markersize=2.5, linewidth=1.2, color=color)
+    axes[0].set_ylabel("Area [$10^{21}$ cm$^2$]")
+    axes[1].set_ylabel("Signed flux [$10^{21}$ Mx]")
+    axes[2].set_ylabel("Boundary length [Mm]")
+    for axis in axes:
+        axis.grid(True, alpha=0.3)
     axes[-1].set_xlabel("Simulation time [h]")
-    fig.suptitle("r_index=0 open-field area and magnetic-flux evolution")
-    return fig
-
-
-def make_boundary_length_figure(
-    times: np.ndarray,
-    boundary_length_cm: np.ndarray,
-) -> plt.Figure:
-    """Plot total open-field boundary length versus simulation time."""
-    boundary_length_mm = np.asarray(boundary_length_cm, dtype=float) / 1.0e8
-    fig, ax = plt.subplots(1, 1, figsize=(10, 4.5), constrained_layout=True)
-    ax.plot(times, boundary_length_mm, marker="o", markersize=3.0, linewidth=1.2)
-    ax.set_xlabel("Simulation time [h]")
-    ax.set_ylabel("Open-field boundary length [Mm]")
-    ax.set_title("r_index=0 total open-field boundary length")
-    ax.grid(True, alpha=0.3)
+    fig.suptitle(f"Coronal-hole ROI: {sign_label} r_index=0 topology evolution")
     return fig
 
 
 def main() -> None:
-    """Measure and save positive, negative, and total open-field diagnostics."""
+    """Measure and save one selected-polarity open-field topology history."""
+    if OPEN_FIELD_POLARITY not in {-1, 1}:
+        raise ValueError("OPEN_FIELD_POLARITY must be -1 or +1.")
     entries = discover_open_closed_files()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     times = []
     boundary_length_cm_list = []
-    metric_lists = {
-        f"{region}_{quantity}": []
-        for region in ("positive", "negative", "all")
-        for quantity in ("area_cm2", "signed_flux_mx", "unsigned_flux_mx")
-    }
+    area_cm2_list = []
+    signed_flux_mx_list = []
+    unsigned_flux_mx_list = []
 
     reference_theta = None
     reference_phi = None
@@ -224,20 +268,25 @@ def main() -> None:
             raise ValueError(f"Incompatible spherical grid: {filename}")
 
         area_cm2 = surface_cell_area(theta, phi, radius_rs)
-        boundary_length_cm = open_closed_boundary_length(theta, phi, labels, radius_rs)
+        analysis_mask = coronal_hole_region_mask(theta, phi, time_hours)
+        boundary_length_cm = open_closed_boundary_length(
+            theta, phi, labels, radius_rs, analysis_mask, OPEN_FIELD_POLARITY,
+        )
         boundary_length_cm_list.append(boundary_length_cm)
-        masks = {"positive": labels == 1, "negative": labels == -1, "all": np.abs(labels) == 1}
-        for region, mask in masks.items():
-            area, signed_flux, unsigned_flux = region_metrics(mask, area_cm2, br)
-            metric_lists[f"{region}_area_cm2"].append(area)
-            metric_lists[f"{region}_signed_flux_mx"].append(signed_flux)
-            metric_lists[f"{region}_unsigned_flux_mx"].append(unsigned_flux)
+        mask = (labels == OPEN_FIELD_POLARITY) & analysis_mask
+        area, signed_flux, unsigned_flux = region_metrics(mask, area_cm2, br)
+        area_cm2_list.append(area)
+        signed_flux_mx_list.append(signed_flux)
+        unsigned_flux_mx_list.append(unsigned_flux)
         times.append(time_hours)
 
-    metrics = {key: np.asarray(values, dtype=float) for key, values in metric_lists.items()}
+    area_cm2 = np.asarray(area_cm2_list, dtype=float)
+    signed_flux_mx = np.asarray(signed_flux_mx_list, dtype=float)
+    unsigned_flux_mx = np.asarray(unsigned_flux_mx_list, dtype=float)
     boundary_length_cm = np.asarray(boundary_length_cm_list, dtype=float)
     boundary_length_mm = boundary_length_cm / 1.0e8
-    output_data = OUTPUT_DIR / "open_field_area_flux.rindex0.npz"
+    polarity_tag = "negative" if OPEN_FIELD_POLARITY == -1 else "positive"
+    output_data = OUTPUT_DIR / f"open_field_topology.{polarity_tag}.npz"
     np.savez_compressed(
         output_data,
         time_hours=np.asarray(times, dtype=float),
@@ -245,27 +294,32 @@ def main() -> None:
         phi=reference_phi,
         surface_radius_rs=float(reference_radius),
         open_closed_tag=OPEN_CLOSED_TAG,
+        open_field_polarity=OPEN_FIELD_POLARITY,
+        analysis_region="north_lat_ge_60_union_differentially_rotated_low_mid_roi",
+        region_reference_time_hours=CH_REGION_REFERENCE_TIME_HOURS,
+        north_latitude_min_deg=CH_REGION_NORTH_LATITUDE_MIN_DEG,
+        low_mid_lon_min_deg=CH_REGION_LOW_MID_LON_MIN_DEG,
+        low_mid_lon_max_deg=CH_REGION_LOW_MID_LON_MAX_DEG,
+        low_mid_lat_min_deg=CH_REGION_LOW_MID_LAT_MIN_DEG,
+        low_mid_lat_max_deg=CH_REGION_LOW_MID_LAT_MAX_DEG,
         random_seed=RANDOM_SEED,
-        open_field_boundary_length_cm=boundary_length_cm,
-        open_field_boundary_length_Mm=boundary_length_mm,
-        **metrics,
+        area_cm2=area_cm2,
+        signed_magnetic_flux_mx=signed_flux_mx,
+        unsigned_magnetic_flux_mx=unsigned_flux_mx,
+        boundary_length_cm=boundary_length_cm,
+        boundary_length_Mm=boundary_length_mm,
     )
 
     print(f"Saved data:\n  {output_data}")
     if SAVE_FIGURE:
         times_array = np.asarray(times, dtype=float)
 
-        fig = make_figure(times_array, metrics)
-        output_figure = OUTPUT_DIR / "open_field_area_flux.rindex0.png"
+        fig = make_figure(times_array, area_cm2, signed_flux_mx, boundary_length_cm)
+        output_figure = OUTPUT_DIR / f"open_field_topology.{polarity_tag}.png"
+        add_figure_provenance(fig, "analyze_open_field_topology.py")
         fig.savefig(output_figure, dpi=DPI, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved figure:\n  {output_figure}")
-
-        boundary_fig = make_boundary_length_figure(times_array, boundary_length_cm)
-        boundary_output_figure = OUTPUT_DIR / "open_field_boundary_length.rindex0.png"
-        boundary_fig.savefig(boundary_output_figure, dpi=DPI, bbox_inches="tight")
-        plt.close(boundary_fig)
-        print(f"Saved boundary-length figure:\n  {boundary_output_figure}")
 
 
 if __name__ == "__main__":

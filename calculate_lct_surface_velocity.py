@@ -4,6 +4,9 @@ Dependencies: numpy==1.26.4, scipy>=1.10,<1.15, matplotlib==3.10.8.
 The input Br maps are in G.  Output velocities are Vtheta/Vphi [km s^-1],
 where positive Vtheta is toward increasing colatitude and positive Vphi is
 toward increasing longitude.
+
+Outputs: `lct_footpoint_velocity.time.<t0>_to_<t1>.npz` and, when enabled,
+the identically tagged `.png` velocity diagnostic.
 """
 
 from __future__ import annotations
@@ -15,7 +18,9 @@ import numpy as np
 from scipy.ndimage import gaussian_filter, map_coordinates
 
 from config import GRID_FILE, LOCAL_MERGED_DIR, WORK_ROOT
+from figure_provenance import add_figure_provenance
 from read_merged_sip_data import read_merged_physics, select_merged_data_files
+from utils import differential_rotation_rate_deg_per_day
 
 
 # ======================================================================
@@ -38,11 +43,6 @@ MIN_CORRELATION = 0.25
 MIN_TEXTURE_GAUSS = 1.0e-5
 POLAR_SIN_THETA_MIN = 0.05
 
-# Snodgrass-like photospheric differential rotation used as the LCT reference.
-DIFFROT_A_DEG_PER_DAY = 14.713
-DIFFROT_B_DEG_PER_DAY = -2.396
-DIFFROT_C_DEG_PER_DAY = -1.787
-
 SAVE_FIGURE = True
 DPI = 220
 RANDOM_SEED = 42
@@ -54,26 +54,13 @@ RANDOM_SEED = 42
 
 def velocity_filename(time_start_hours: float, time_end_hours: float) -> Path:
     return OUTPUT_DIR / (
-        f"lct_velocity.time.{time_start_hours:.2f}_to_{time_end_hours:.2f}."
-        "rindex0.npz"
+        f"lct_footpoint_velocity.time.{time_start_hours:.2f}_to_{time_end_hours:.2f}.npz"
     )
 
 
 def figure_filename(time_start_hours: float, time_end_hours: float) -> Path:
     return OUTPUT_DIR / (
-        f"lct_velocity.time.{time_start_hours:.2f}_to_{time_end_hours:.2f}."
-        "rindex0.png"
-    )
-
-
-def differential_rotation_rate_deg_per_day(latitude_deg: np.ndarray) -> np.ndarray:
-    """Return the reference angular rate in deg day^-1."""
-    latitude_rad = np.radians(latitude_deg)
-    sin2 = np.sin(latitude_rad) ** 2
-    return (
-        DIFFROT_A_DEG_PER_DAY
-        + DIFFROT_B_DEG_PER_DAY * sin2
-        + DIFFROT_C_DEG_PER_DAY * sin2**2
+        f"lct_footpoint_velocity.time.{time_start_hours:.2f}_to_{time_end_hours:.2f}.png"
     )
 
 
@@ -339,6 +326,7 @@ def main() -> None:
 
         if SAVE_FIGURE:
             fig = make_velocity_figure(theta, phi, velocity_theta, velocity_phi, correlation, time_start, time_end)
+            add_figure_provenance(fig, "calculate_lct_surface_velocity.py")
             fig.savefig(figure_filename(time_start, time_end), dpi=DPI, bbox_inches="tight")
             plt.close(fig)
 

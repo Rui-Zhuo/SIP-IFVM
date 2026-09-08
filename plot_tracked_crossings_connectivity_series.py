@@ -1,5 +1,5 @@
 """
-plot_tracked_open_field_time_series_202609031549.py
+plot_tracked_crossings_connectivity_series.py
 
 Post-process tracked SIP-IFVM open-field footpoints.
 
@@ -38,7 +38,11 @@ Longitude time series can optionally remove the empirical
 latitude-dependent differential-rotation drift.
 
 Topology-map plotting is handled separately by:
-    plot_tracked_open_field_map.py
+    plot_tracked_crossings_connectivity_map.py
+
+Outputs: `selected_open_boundary_footpoints_crossings.r.<R0>.npz`,
+`open_boundary_footpoint_tracks.crossing-r.<R0>.png`, and
+`open_boundary_crossing_tracks.r.<R0>.png`.
 """
 
 from __future__ import annotations
@@ -50,6 +54,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from config import OPEN_CLOSED_DIR, TRACK_OPEN_DIR, WORK_ROOT
+from figure_provenance import add_figure_provenance
 
 
 # ======================================================================
@@ -171,17 +176,17 @@ DPI = 300
 
 TIME_SERIES_OUTPUT_FILE = (
     WORK_DIR
-    / f"tracked_open_footpoints.r0.{R0:g}.png"
+    / f"open_boundary_footpoint_tracks.crossing-r.{R0:g}.png"
 )
 
 R0_TIME_SERIES_OUTPUT_FILE = (
     WORK_DIR
-    / f"tracked_open_r0_footpoints.r0.{R0:g}.png"
+    / f"open_boundary_crossing_tracks.r.{R0:g}.png"
 )
 
 ID_OUTPUT_FILE = (
     WORK_DIR
-    / "tracked_open_field_id.npz"
+    / f"selected_open_boundary_footpoints_crossings.r.{R0:g}.npz"
 )
 
 
@@ -1887,12 +1892,14 @@ def main():
             exist_ok=True,
         )
 
+        add_figure_provenance(fig_series, "plot_tracked_crossings_connectivity_series.py")
         fig_series.savefig(
             TIME_SERIES_OUTPUT_FILE,
             dpi=DPI,
             bbox_inches="tight",
         )
 
+        add_figure_provenance(fig_r0_series, "plot_tracked_crossings_connectivity_series.py")
         fig_r0_series.savefig(
             R0_TIME_SERIES_OUTPUT_FILE,
             dpi=DPI,

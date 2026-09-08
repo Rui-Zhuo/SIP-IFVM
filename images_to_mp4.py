@@ -1,3 +1,8 @@
+"""Convert a time-ordered PNG sequence to an MP4 movie.
+
+Outputs: one user-configured `.mp4` file.  It does not alter input PNG files.
+"""
+
 import os
 import re
 
@@ -236,21 +241,9 @@ def image2video(
     )
 
 
-root_dir = FULL_SLICE_DIR / "82d1to132"
-sub_dir = "vr"
-
-image_dir = os.path.join(
-    root_dir,
-    sub_dir + "/",
-)
-
-video_path = os.path.join(
-    root_dir,
-    sub_dir + ".mp4",
-)
-
-image2video(
-    image_dir=image_dir,
-    video_path=video_path,
-    fps=8,
-)
+if __name__ == "__main__":
+    root_dir = FULL_SLICE_DIR / "82d1to132"
+    sub_dir = "vr"
+    image_dir = os.path.join(root_dir, sub_dir)
+    video_path = os.path.join(root_dir, sub_dir + ".mp4")
+    image2video(image_dir=image_dir, video_path=video_path, fps=8)
